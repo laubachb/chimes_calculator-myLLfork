@@ -124,7 +124,7 @@ cd -
 if [ -n "$FINGERPRINT_FLAG" ]; then
     echo ""
     echo "Compiling histogram executable for ChIMES fingerprints"
-    mpiicc -O3 -o ../../chimesFF/src/FP/histogram ../../chimesFF/src/FP/multi_calc_histogram.cpp ../../chimesFF/src/FP/chimesFF.cpp
+    mpiicc -O3 -o ../../chimesFF/src/FP/histogram ../../chimesFF/src/FP/multi_calc_histogram_hybrid.cpp ../../chimesFF/src/FP/chimesFF.cpp
 fi
 
 # Finish

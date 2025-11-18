@@ -18,25 +18,36 @@ using namespace GlobalParams;
 
 int nprocs;
 int my_rank;
+double alpha = 1.0;
+double max_composition_difference_2b = 0.0;
+double max_composition_difference_3b = 0.0;
+double max_composition_difference_4b = 0.0;
 
 #include <iomanip>
 #include "chimesFF.h"  // Make sure this includes the GlobalParams namespace declaration
 
-void print_global_params() {
+void print_global_params() 
+{
     
     // Print 2-body cutoffs
+    if (my_rank == 0)
+    {
     cout << "\n2-Body Cutoffs:\n";
-    for (size_t i = 0; i < rcut_2b_list.size(); ++i) {
+    for (size_t i = 0; i < rcut_2b_list.size(); ++i) 
+    {
         cout << "Pair " << i << ": ";
         cout << "Inner = " << fixed << setprecision(4) << rcut_2b_list[i][0];
         cout << ", Outer = " << rcut_2b_list[i][1] << "\n";
     }
+   
 
     // Print 3-body cutoffs
     cout << "\n3-Body Cutoffs:\n";
-    for (size_t i = 0; i < rcut_3b_list.size(); ++i) {
+    for (size_t i = 0; i < rcut_3b_list.size(); ++i) 
+    {
         cout << "Triplet " << i << ":\n";
-        for (size_t j = 0; j < rcut_3b_list[i].size(); ++j) {
+        for (size_t j = 0; j < rcut_3b_list[i].size(); ++j) 
+	{
             cout << "  Pair " << j << ": ";
             cout << "Inner = " << rcut_3b_list[i][j][0];
             cout << ", Outer = " << rcut_3b_list[i][j][1] << "\n";
@@ -45,9 +56,11 @@ void print_global_params() {
 
     // Print 4-body cutoffs
     cout << "\n4-Body Cutoffs:\n";
-    for (size_t i = 0; i < rcut_4b_list.size(); ++i) {
+    for (size_t i = 0; i < rcut_4b_list.size(); ++i) 
+    {
         cout << "Quadruplet " << i << ":\n";
-        for (size_t j = 0; j < rcut_4b_list[i].size(); ++j) {
+        for (size_t j = 0; j < rcut_4b_list[i].size(); ++j) 
+	{
             cout << "  Pair " << j << ": ";
             cout << "Inner = " << rcut_4b_list[i][j][0];
             cout << ", Outer = " << rcut_4b_list[i][j][1] << "\n";
@@ -56,10 +69,12 @@ void print_global_params() {
 
     // Print Morse lambda values
     cout << "\nMorse Lambda Values:\n";
-    for (size_t i = 0; i < morse_lambda_list.size(); ++i) {
+    for (size_t i = 0; i < morse_lambda_list.size(); ++i) 
+    {
         cout << "Pair " << i << ": λ = " 
                   << fixed << setprecision(4) 
                   << morse_lambda_list[i] << "\n";
+    }
     }
 }
 
@@ -338,6 +353,8 @@ double compute_composition_weight_4b(vector<double> edges, vector<double> atom_t
 void gen_flat_hists(vector<double > & clu1, vector<double > & clu2, vector<double> & clu1_atm_types, vector<double> & clu2_atm_types, int n_cluster_pairs, int nbin, double binw, double maxd, string histfile, bool same = false, int body_cnt = 2)
 {
     int                     bin;
+    double                  normalized_structure_distance;
+    double                  normalized_composition_distance;
     double                  total_dist;
     double                  dist_structure;
     double                  dist_comp_1;
@@ -415,18 +432,27 @@ void gen_flat_hists(vector<double > & clu1, vector<double > & clu2, vector<doubl
             if (body_cnt == 2){
                 d_comp1 = compute_composition_weight_2b(edge_length_1, atom_list_1);
                 d_comp2 = compute_composition_weight_2b(edge_length_2, atom_list_2);
+                normalized_composition_distance = abs(d_comp1 - d_comp2) / max_composition_difference_2b;
             } else if (body_cnt == 3){
                 d_comp1 = compute_composition_weight_3b(edge_length_1, atom_list_1);
                 d_comp2 = compute_composition_weight_3b(edge_length_2, atom_list_2);
+                normalized_composition_distance = abs(d_comp1 - d_comp2) / max_composition_difference_3b;
             } else if (body_cnt == 4){
                 d_comp1 = compute_composition_weight_4b(edge_length_1, atom_list_1);
                 d_comp2 = compute_composition_weight_4b(edge_length_2, atom_list_2);
+                normalized_composition_distance = abs(d_comp1 - d_comp2) / max_composition_difference_4b;
             } else {
                 cout << "Improper body count" << endl;
                 exit(1);
             }
-            total_dist = sqrt(dist_struct) + abs(d_comp1 - d_comp2);
-            bin  = get_bin(binw, maxd, total_dist);
+            normalized_structure_distance = sqrt(dist_struct) / (sqrt(2*body_cnt*(body_cnt-1)));
+            total_dist = alpha * normalized_structure_distance + (1.0 - alpha) * normalized_composition_distance;
+            int bin;
+            if (alpha == 0.0 && atom_typ_cnt == 1){
+                bin = 0;
+            } else {
+                bin  = get_bin(binw, maxd, total_dist);
+            }
             
             if (bin > nbin)
             {
@@ -480,6 +506,7 @@ void gen_flat_hists(vector<double > & clu1, vector<double > & clu2, vector<doubl
  
 }
 
+// To compile - mpiicc -O3 -o histogram multi_calc_histogram.cpp chimesFF.cpp
 int main(int argc, char *argv[])
 {
     my_rank = 0;
@@ -534,6 +561,7 @@ int main(int argc, char *argv[])
         all_files[i] = string(buffer, str_len);
     }
     string param_file = argv[1];
+    alpha = atof(argv[2]);
     // Initialize ChIMES calculator
     chimesFF ff;
     ff.init(my_rank);
@@ -542,6 +570,10 @@ int main(int argc, char *argv[])
     ff.build_pair_int_quad_map();
     
     print_global_params();
+
+    max_composition_difference_2b = 1 - ((2.0*min_descr) / (2.0*max_descr));
+    max_composition_difference_3b = 1 - ((6.0*min_descr) / (6.0*max_descr));
+    max_composition_difference_4b = 1 - ((10.0*min_descr) / (10.0*max_descr));
 
     // Process individual files
     for (const auto &file_idx : all_files) {
@@ -557,9 +589,13 @@ int main(int argc, char *argv[])
 
         // Histogram parameters
         const int nbin_2b = 100, nbin_3b = 100, nbin_4b = 100;
-        const double maxd_2b = 3.0, 
-                     maxd_3b = sqrt(12.0) + 1.0,
-                     maxd_4b = sqrt(24.0) + 1.0;
+        // const double maxd_2b = 3.0, 
+        //              maxd_3b = sqrt(12.0) + 1.0,
+        //              maxd_4b = sqrt(24.0) + 1.0;
+
+        const double maxd_2b = 1, 
+                     maxd_3b = 1,
+                     maxd_4b = 1;
 
         double binw_2b = maxd_2b/nbin_2b; 
         double binw_3b = maxd_3b/nbin_3b; 
@@ -569,7 +605,8 @@ int main(int argc, char *argv[])
         vector<double> f1_2b_atom_types, f2_2b_atom_types;
         int npairs_2b = 1;
         read_flat_clusters(f1_2b, npairs_2b, f1_2b_flat_clusters, f1_2b_atom_types, 2);
-        cout << "Read in 2B clusters..." << endl;
+        if (my_rank == 0)	
+		cout << "Read in 2B clusters..." << endl;
         read_flat_clusters(f2_2b, npairs_2b, f2_2b_flat_clusters, f2_2b_atom_types, 2);
 
         // Process 3B clusters
@@ -579,7 +616,8 @@ int main(int argc, char *argv[])
         vector<double> f1_3b_atom_types, f2_3b_atom_types;
         int npairs_3b = 3;
         read_flat_clusters(f1_3b, npairs_3b, f1_3b_flat_clusters, f1_3b_atom_types, 3);
-        cout << "Read in 3B clusters..." << endl;
+        if (my_rank == 0)
+		cout << "Read in 3B clusters..." << endl;
         read_flat_clusters(f2_3b, npairs_3b, f2_3b_flat_clusters, f2_3b_atom_types, 3);
 
         // Process 4B clusters
@@ -589,7 +627,8 @@ int main(int argc, char *argv[])
         vector<double> f1_4b_atom_types, f2_4b_atom_types; 
         int npairs_4b = 6;
         read_flat_clusters(f1_4b, npairs_4b, f1_4b_flat_clusters, f1_4b_atom_types, 4);
-        cout << "Read in 4B clusters..." << endl;
+        if (my_rank == 0)
+		cout << "Read in 4B clusters..." << endl;
         read_flat_clusters(f2_4b, npairs_4b, f2_4b_flat_clusters, f2_4b_atom_types, 4);
         
         if (my_rank == 0) {

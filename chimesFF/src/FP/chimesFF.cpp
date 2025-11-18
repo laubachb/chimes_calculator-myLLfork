@@ -26,6 +26,7 @@ namespace GlobalParams {
     vector<double> morse_lambda_list;
     vector<double> atomic_descriptors;
     double max_descr;
+    double min_descr;
 
     // Add mapping vectors
     vector <int> atom_int_pair_mapping;
@@ -727,8 +728,9 @@ void chimesFF::read_parameters(string paramfile)
         	        }
 		}
 		else
-		{
-			cout << "chimesFF: \tType is excluded... skipping." << endl;
+		{	
+			if (rank == 0)
+				cout << "chimesFF: \tType is excluded... skipping." << endl;
 		}
             }    
             
@@ -1058,7 +1060,8 @@ void chimesFF::read_parameters(string paramfile)
 		}
 		else
 		{
-			cout << "chimesFF: \tType is excluded... skipping." << endl;		
+			if (rank == 0)
+				cout << "chimesFF: \tType is excluded... skipping." << endl;		
 		}
             }    
             
@@ -1359,7 +1362,9 @@ void chimesFF::read_parameters(string paramfile)
     GlobalParams::morse_lambda_list = morse_var;
     GlobalParams::atomic_descriptors = atomic_des;
     double max_descriptor = *std::max_element(atomic_des.begin(), atomic_des.end());
+    double min_descriptor = *std::min_element(atomic_des.begin(), atomic_des.end());
     GlobalParams::max_descr = max_descriptor;
+    GlobalParams::min_descr = min_descriptor;
 
     GlobalParams::atom_int_pair_mapping = atom_int_pair_map;
     GlobalParams::atom_int_trip_mapping = atom_int_trip_map;
@@ -2266,7 +2271,6 @@ void chimesFF::build_pair_int_quad_map()
     // to support GPU environment without string operations.
     // This must be called prior to force evaluation.
 
-    cout << "Entered weird func" << endl;
     const int natoms = 4 ;
     const int npairs = natoms * (natoms-1) / 2 ;
     vector<int> pair_map(npairs) ;
@@ -2317,13 +2321,15 @@ void chimesFF::build_pair_int_quad_map()
         if ( pair_int_quad_map[i].size() == 0 )
         {
 		if (atom_int_quad_map[i] >= 0)
-            		cout << "Error: Did not initialize pair_int_quad_map for entry " << i << endl ;
+			if(rank==0)
+            			cout << "Error: Did not initialize pair_int_quad_map for entry " << i << endl ;
 		else
-			cout << "Warning: Did not initialize pair_int_quad_map for excluded entry " << i << endl ;
+			if(rank==0)
+				cout << "Warning: Did not initialize pair_int_quad_map for excluded entry " << i << endl ;
         }
     }   
     GlobalParams::pair_int_quad_mapping = pair_int_quad_map;
-    cout << "Assigned global param" << endl;
+    //cout << "Assigned global param" << endl;
 }
 
 void chimesFF::build_pair_int_trip_map()
@@ -2375,9 +2381,11 @@ void chimesFF::build_pair_int_trip_map()
         if ( pair_int_trip_map[i].size() == 0 )
         {
 		if (atom_int_trip_map[i] >= 0)
-            		cout << "Error: Did not initialize pair_int_trip_map for entry " << i << endl ;
+			if(rank==0)
+            			cout << "Error: Did not initialize pair_int_trip_map for entry " << i << endl ;
 		else
-			cout << "Warning: Did not initialize pair_int_trip_map for excluded entry " << i << endl ;
+			if(rank==0)
+				cout << "Warning: Did not initialize pair_int_trip_map for excluded entry " << i << endl ;
         }
     }
     
