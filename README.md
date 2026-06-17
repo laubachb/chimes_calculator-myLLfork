@@ -87,9 +87,23 @@ every timestep.
 
 ### Requirements
 
-- NVIDIA GPU with Compute Capability ≥ 6.0 (A100 = SM 80, H100 = SM 90)
+- NVIDIA GPU with Compute Capability ≥ 6.0 (Pascal or newer — see table below)
 - CUDA Toolkit ≥ 11.0
 - CMake ≥ 3.18
+
+#### Supported GPU architectures
+
+| GPU | SM arch | `CUDA_ARCH` value |
+|-----|---------|-------------------|
+| H100 | sm_90 | `90` (default) |
+| A100 | sm_80 | `80` |
+| A30 / A40 / RTX 3090 | sm_86 | `86` |
+| L40S / RTX 4090 | sm_89 | `89` |
+| V100 | sm_70 | `70` |
+| T4 | sm_75 | `75` |
+
+`atomicAdd` for `double` requires SM ≥ 6.0 (Pascal, 2016+); older GPUs are not supported.
+A comma-separated list (e.g. `CUDA_ARCH=80,90`) produces a fat binary that runs on multiple generations.
 
 ### Building the ChIMES library with GPU support
 
