@@ -1,0 +1,91 @@
+# mpi_chimes_gpu = MPI + ChIMES + CUDA GPU acceleration
+#
+# Usage:
+#   Pre-build the ChIMES GPU static library (chimesFF_gpu.o + dlink.o) with
+#   install_gpu.sh, then this Makefile compiles LAMMPS with -DUSE_CUDA and
+#   links against those objects plus the CUDA runtime.
+#
+#   CUDA_PATH must point to the CUDA toolkit root (e.g. export CUDA_PATH=/usr/local/cuda)
+#   CHIMES_GPU_LIB must point to the pre-built GPU archive  (set by install_gpu.sh)
+
+SHELL = /bin/sh
+
+# ---------------------------------------------------------------------
+# compiler/linker settings
+
+CC         = mpiicpc
+CCFLAGS    = -O3 -std=c++11 -restrict -DUSE_CUDA -DMAX_POLY_ORDER=24 \
+             -I$(CUDA_PATH)/include
+SHFLAGS    = -fPIC
+DEPFLAGS   = -M
+
+LINK       = mpiicpc
+LINKFLAGS  = -O3 -std=c++11 \
+             -L$(CUDA_PATH)/lib64 -lcudart -lcudadevrt \
+             $(CHIMES_GPU_LIB)
+LIB        =
+SIZE       = size
+
+ARCHIVE    = ar
+ARFLAGS    = -rc
+SHLIBFLAGS = -shared
+
+# ---------------------------------------------------------------------
+# LAMMPS-specific settings
+
+LMP_INC = -DLAMMPS_GZIP -DLAMMPS_MEMALIGN=64
+
+# MPI library (Intel MPI)
+MPI_INC     = -DMPICH_SKIP_MPICXX -DOMPI_SKIP_MPICXX=1 -I${I_MPI_ROOT}/include
+MPI_PATH    = -L${I_MPI_ROOT}/lib -L${I_MPI_ROOT}/lib/release
+MPI_LIB     =
+
+FFT_INC     =
+FFT_PATH    =
+FFT_LIB     =
+
+JPG_INC     =
+JPG_PATH    =
+JPG_LIB     =
+
+# ---------------------------------------------------------------------
+# build rules and dependencies -- do not edit below this line
+
+include	Makefile.package.settings
+include	Makefile.package
+
+EXTRA_INC          = $(LMP_INC) $(PKG_INC) $(MPI_INC) $(FFT_INC) $(JPG_INC) $(PKG_SYSINC)
+EXTRA_PATH         = $(PKG_PATH) $(MPI_PATH) $(FFT_PATH) $(JPG_PATH) $(PKG_SYSPATH)
+EXTRA_LIB          = $(PKG_LIB) $(MPI_LIB) $(FFT_LIB) $(JPG_LIB) $(PKG_SYSLIB)
+EXTRA_CPP_DEPENDS  = $(PKG_CPP_DEPENDS)
+EXTRA_LINK_DEPENDS = $(PKG_LINK_DEPENDS)
+
+vpath %.cpp ..
+vpath %.h ..
+
+$(EXE): main.o $(LMPLIB) $(EXTRA_LINK_DEPENDS)
+	$(LINK) $(LINKFLAGS) main.o $(EXTRA_PATH) $(LMPLINK) $(EXTRA_LIB) $(LIB) -o $@
+	$(SIZE) $@
+
+$(ARLIB): $(OBJ) $(EXTRA_LINK_DEPENDS)
+	@rm -f ../$(ARLIB)
+	$(ARCHIVE) $(ARFLAGS) ../$(ARLIB) $(OBJ)
+	@rm -f $(ARLIB)
+	@ln -s ../$(ARLIB) $(ARLIB)
+
+$(SHLIB): $(OBJ) $(EXTRA_LINK_DEPENDS)
+	$(CC) $(CCFLAGS) $(SHFLAGS) $(SHLIBFLAGS) $(EXTRA_PATH) -o ../$(SHLIB) \
+        $(OBJ) $(EXTRA_LIB) $(LIB)
+	@rm -f $(SHLIB)
+	@ln -s ../$(SHLIB) $(SHLIB)
+
+%.o:%.cpp
+	$(CC) $(CCFLAGS) $(SHFLAGS) $(EXTRA_INC) -c $<
+
+depend : fastdep.exe $(SRC)
+	@./fastdep.exe $(EXTRA_INC) -- $^ > .depend || exit 1
+
+fastdep.exe: ../DEPEND/fastdep.c
+	cc -O -o $@ $<
+
+sinclude .depend

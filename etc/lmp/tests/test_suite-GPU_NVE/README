@@ -1,0 +1,82 @@
+GPU ChIMES NVE test
+===================
+
+Overview
+--------
+NVE ensemble run of 512 carbon atoms using the Carbon-2.0 (2+3+4B,
+Tersoff cutoff) ChIMES force field, executed with the CUDA GPU path.
+
+The test verifies that GPU-computed energies and forces produce the
+same macroscopic thermodynamics as the CPU reference (stored in
+../test_suite-NVE/expected_output/).  A tolerance of 1e-3 is used
+instead of the CPU-to-CPU value of 1e-5 to accommodate expected
+non-determinism from GPU floating-point atomicAdd reductions.
+
+Files
+-----
+in.lammps              LAMMPS input (identical physics to test_suite-NVE,
+                        references the same data/parameter files)
+run_gpu_test.sh        Interactive runner (use inside an idev GPU session)
+submit_stampede3.slurm SLURM batch script for the gpu-h100 partition
+compare_gpu.py         Comparison script with configurable tolerance
+
+
+Prerequisites
+-------------
+1. The GPU-enabled LAMMPS binary must be built first:
+
+       cd <repo>/etc/lmp
+       module load intel/24.0 impi/21.11 cuda/12.4
+       ./install_gpu.sh          # builds exe/lmp_mpi_chimes_gpu
+
+   See etc/lmp/install_gpu.sh for per-machine module/hosttype details.
+
+2. A GPU compute node (login nodes do not have GPUs).
+
+
+Running on Stampede3 -- interactive session
+-------------------------------------------
+# Step 1: obtain an interactive GPU node (H100)
+idev -p gpu-h100 -N 1 -n 1 --gpus=1 -t 00:30:00 -A <YOUR_ALLOCATION>
+
+# Step 2: load modules (same as used for the build)
+module load intel/24.0 impi/21.11 cuda/12.4 python3/3.11
+
+# Step 3: run the test
+cd <repo>/etc/lmp/tests/test_suite-GPU_NVE
+./run_gpu_test.sh
+
+Expected output (current_output/):
+  out.lammps   -- LAMMPS stdout (thermo table)
+  log.lammps   -- LAMMPS log file
+  compare.log  -- empty if PASS, discrepancies listed if FAIL
+
+
+Running on Stampede3 -- batch submission
+----------------------------------------
+# Edit submit_stampede3.slurm and replace <YOUR_ALLOCATION>
+# with your TACC project allocation code.
+
+sbatch submit_stampede3.slurm
+
+Monitor with:  squeue -u $USER
+Results in:    current_output/
+
+
+Manual one-liner (from an interactive GPU node)
+-----------------------------------------------
+srun -n 1 ../../exe/lmp_mpi_chimes_gpu -i in.lammps | tee out.lammps
+python3 compare_gpu.py ../test_suite-NVE/expected_output/log.lammps \
+        log.lammps 1e-3
+
+
+Tolerance rationale
+-------------------
+GPU floating-point sums are non-associative because multiple CUDA threads
+atomically accumulate forces and energies using atomicAdd.  The order of
+additions depends on thread scheduling and varies between runs.  For
+double-precision IEEE 754 arithmetic this causes per-value differences on
+the order of a few ULP (units in the last place), which propagates to
+~1e-4 differences in per-step thermo quantities after 100 steps.  A
+tolerance of 1e-3 provides comfortable margin while still catching genuine
+physics errors.

@@ -1,0 +1,70 @@
+##########################################
+# GPU-accelerated ChIMES NVE test
+#
+# Validates that the CUDA GPU path in pair_style chimesFF
+# produces energies and forces consistent with the reference
+# CPU run (test_suite-NVE/expected_output/log.lammps).
+#
+# Run with the GPU-enabled binary on a single GPU rank:
+#   srun -n 1 ../../exe/lmp_mpi_chimes_gpu -i in.lammps
+##########################################
+
+# USER-SPECIFIED VARIABLES
+
+variable tstep               equal  0.5
+variable run_steps           equal  100
+variable temperature         equal  3000
+variable pressure            equal  30
+
+variable io_freq             equal  10
+
+variable data_file           string ../test_suite-NVE/diamond_3.21gcc_512atoms.data.in
+variable param_file          string ../../../../../serial_interface/tests/force_fields/published_params.Carbon-2.0.Small.2+3+4b.Tersoff.txt
+
+########################################
+# GENERAL CONTROLS
+########################################
+
+units           real
+newton          on
+atom_style      atomic
+atom_modify     sort 0 0.0
+atom_modify     map array
+
+neighbor        1.5 bin
+neigh_modify    delay 0 every 1 check yes
+
+########################################
+# INITIALIZATION CONTROLS
+########################################
+
+read_data       ${data_file}
+velocity        all create ${temperature} 1234 dist gaussian mom yes rot yes loop all
+
+########################################
+# FORCE FIELD CONTROLS
+########################################
+
+pair_style      chimesFF
+pair_coeff      * * ${param_file}
+
+########################################
+# RESTART CONTROLS
+########################################
+
+restart         ${io_freq} a.restart b.restart
+
+########################################
+# RUN, DUMP, AND THERMO CONTROLS
+########################################
+
+variable temp_damp  equal  v_tstep*100.0
+variable press_damp equal  v_tstep*1000.0
+fix             1 all nve
+
+thermo_style    custom step time temp press density ke pe etotal econserve
+thermo_modify   line one format float %20.5f flush yes
+thermo          ${io_freq}
+
+timestep        ${tstep}
+run             ${run_steps} upto
