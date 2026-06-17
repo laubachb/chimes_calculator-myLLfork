@@ -517,6 +517,12 @@ void chimesFF_gpu_upload_params_flat(
     // Free any previously uploaded parameters
     if (g_initialized) chimesFF_gpu_free_params();
 
+    // k3B allocates ~1.5 KB and k4B ~3 KB of thread-local (stack) storage for
+    // Chebyshev arrays.  The CUDA default per-thread stack is only 1 KB, which
+    // causes a silent stack overflow and an illegal-memory-access in those kernels.
+    // Set 8 KB per thread so all three body-order kernels have headroom.
+    CUDA_CHECK(cudaDeviceSetLimit(cudaLimitStackSize, 8192));
+
     GPUParams hp = {};  // host-side params struct to fill with device pointers
     hp.n_pairs  = n_pairs;  hp.n_trips  = n_trips;  hp.n_quads  = n_quads;
     hp.order_2b = order_2b; hp.order_3b = order_3b; hp.order_4b = order_4b;
