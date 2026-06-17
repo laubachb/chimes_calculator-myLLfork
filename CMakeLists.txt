@@ -7,7 +7,7 @@ cmake_minimum_required(VERSION 3.13)
 project(ChimesCalc
     VERSION 1.0
     DESCRIPTION "ChIMES calculator: Utilities to compute ChIMES interactions"
-  	LANGUAGES CXX C)
+    LANGUAGES CXX C)
 
 string(TOLOWER "${PROJECT_NAME}" PROJECT_NAME_LOWER)
 
@@ -20,6 +20,10 @@ include(config.cmake)
 
 chimescalc_setup_build_type()
 chimescalc_setup_compiler_flags()
+
+if(WITH_CUDA)
+    enable_language(CUDA)
+endif()
 
 # Check whether libm is needed to provide the round() function in C
 include(CheckLibraryExists)
@@ -38,6 +42,10 @@ set(c-sources
     "chimesFF/api/chimescalc_C.cpp"
     "serial_interface/src/serial_chimes_interface.cpp"
     "serial_interface/api/chimescalc_serial_C.cpp")
+
+if(WITH_CUDA)
+    list(APPEND c-sources "chimesFF/src/chimesFF_gpu.cu")
+endif()
 
 set(c-includes
     "chimesFF/src/chimesFF.h"
@@ -61,6 +69,27 @@ target_include_directories(ChimesCalc PUBLIC
 
 target_compile_definitions(ChimesCalc PRIVATE "DEBUG=${DEBUG}")
 target_compile_features(ChimesCalc PRIVATE cxx_std_11)
+
+if(WITH_CUDA)
+    target_compile_definitions(ChimesCalc PRIVATE USE_CUDA)
+    set_property(TARGET ChimesCalc PROPERTY CUDA_ARCHITECTURES ${CUDA_ARCH})
+    target_compile_options(ChimesCalc PRIVATE
+        $<$<COMPILE_LANGUAGE:CUDA>:-O3 --expt-relaxed-constexpr -Xcompiler -fPIC>)
+
+    # GPU validation test: compares GPU and CPU forces for random clusters.
+    add_executable(chimescalc-gpu-validate
+        "chimesFF/tests/gpu_validate/test_gpu_cpu.cu"
+        "chimesFF/src/chimesFF.cpp"
+        "chimesFF/src/chimesFF_gpu.cu")
+    target_include_directories(chimescalc-gpu-validate PRIVATE
+        "chimesFF/src")
+    target_compile_definitions(chimescalc-gpu-validate PRIVATE USE_CUDA "DEBUG=0")
+    target_compile_features(chimescalc-gpu-validate PRIVATE cxx_std_14)
+    set_property(TARGET chimescalc-gpu-validate PROPERTY CUDA_ARCHITECTURES ${CUDA_ARCH})
+    target_compile_options(chimescalc-gpu-validate PRIVATE
+        $<$<COMPILE_LANGUAGE:CUDA>:-O2 --expt-relaxed-constexpr>)
+    target_link_libraries(chimescalc-gpu-validate PRIVATE m)
+endif()
 
 install(TARGETS ChimesCalc
     EXPORT ${PROJECT_NAME_LOWER}-targets
@@ -116,6 +145,13 @@ target_include_directories(ChimesCalc_dynamic PUBLIC
 
 target_compile_definitions(ChimesCalc_dynamic PRIVATE "DEBUG=${DEBUG}")
 target_compile_features(ChimesCalc_dynamic PRIVATE cxx_std_11)
+
+if(WITH_CUDA)
+    target_compile_definitions(ChimesCalc_dynamic PRIVATE USE_CUDA)
+    set_property(TARGET ChimesCalc_dynamic PROPERTY CUDA_ARCHITECTURES ${CUDA_ARCH})
+    target_compile_options(ChimesCalc_dynamic PRIVATE
+        $<$<COMPILE_LANGUAGE:CUDA>:-O3 --expt-relaxed-constexpr -Xcompiler -fPIC>)
+endif()
 
 install(TARGETS ChimesCalc_dynamic
     EXPORT ${PROJECT_NAME_LOWER}-targets

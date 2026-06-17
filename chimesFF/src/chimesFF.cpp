@@ -3068,14 +3068,169 @@ void chimesFF::build_pair_int_trip_map()
     {
         if ( pair_int_trip_map[i].size() == 0 )
         {
-		if (atom_int_trip_map[i] >= 0)
-			if(rank==0)
+	if (atom_int_trip_map[i] >= 0)
+		if(rank==0)
             			cout << "Error: Did not initialize pair_int_trip_map for entry " << i << endl ;
-		else
-			if(rank==0)
-				cout << "Warning: Did not initialize pair_int_trip_map for excluded entry " << i << endl ;
+	else
+		if(rank==0)
+			cout << "Warning: Did not initialize pair_int_trip_map for excluded entry " << i << endl ;
         }
     }
     
 }
+
+#ifdef USE_CUDA
+#include "chimesFF_gpu.cuh"
+
+void chimesFF::upload_params_to_device()
+{
+    // ----- 2B -----
+
+    int n_pairs = static_cast<int>(chimes_2b_params.size());
+    int order_2b = (poly_orders.size() > 0) ? poly_orders[0] : 0;
+
+    // Compute flattened sizes
+    int total_2b = 0;
+    vector<int> offset_2b(n_pairs + 1, 0);
+    for (int p = 0; p < n_pairs; p++) {
+        offset_2b[p] = total_2b;
+        total_2b    += ncoeffs_2b[p];
+    }
+    offset_2b[n_pairs] = total_2b;
+
+    vector<double> h_params_2b(total_2b);
+    vector<int>    h_pows_2b(total_2b);
+    vector<double> h_cutoff_2b(n_pairs * 2);
+    vector<double> h_morse(n_pairs);
+
+    for (int p = 0; p < n_pairs; p++) {
+        int base = offset_2b[p];
+        for (int c = 0; c < ncoeffs_2b[p]; c++) {
+            h_params_2b[base + c] = chimes_2b_params[p][c];
+            h_pows_2b  [base + c] = chimes_2b_pows  [p][c];
+        }
+        h_cutoff_2b[p * 2 + 0] = chimes_2b_cutoff[p][0];
+        h_cutoff_2b[p * 2 + 1] = chimes_2b_cutoff[p][1];
+        h_morse[p]              = morse_var[p];
+    }
+
+    int pair_map_size = natmtyps * natmtyps;
+    // atom_int_pair_map is already a flat vector of size pair_map_size
+
+    // ----- 3B -----
+
+    int n_trips  = static_cast<int>(chimes_3b_params.size());
+    int order_3b = (poly_orders.size() > 1) ? poly_orders[1] : 0;
+
+    int total_3b = 0;
+    vector<int> offset_3b(n_trips + 1, 0);
+    for (int t = 0; t < n_trips; t++) {
+        offset_3b[t] = total_3b;
+        total_3b    += ncoeffs_3b[t];
+    }
+    offset_3b[n_trips] = total_3b;
+
+    vector<double> h_params_3b(total_3b);
+    vector<int>    h_pows_3b(total_3b * 3);
+    vector<double> h_cutoff_3b(n_trips * 6);   // [t][in_out=0/1][pair=0..2] → t*6 + in_out*3 + pair
+
+    for (int t = 0; t < n_trips; t++) {
+        int base = offset_3b[t];
+        for (int c = 0; c < ncoeffs_3b[t]; c++) {
+            h_params_3b[base + c] = chimes_3b_params[t][c];
+            for (int p = 0; p < 3; p++)
+                h_pows_3b[(base + c) * 3 + p] = chimes_3b_powers[t][c][p];
+        }
+        for (int io = 0; io < 2; io++)
+            for (int p = 0; p < 3; p++)
+                h_cutoff_3b[t * 6 + io * 3 + p] = chimes_3b_cutoff[t][io][p];
+    }
+
+    int trip_map_size = natmtyps * natmtyps * natmtyps;
+    // atom_int_trip_map is already flat, size = trip_map_size
+
+    vector<int> h_pit(trip_map_size * 3, -1);
+    for (int t = 0; t < trip_map_size; t++) {
+        if (pair_int_trip_map[t].size() == 3) {
+            h_pit[t * 3 + 0] = pair_int_trip_map[t][0];
+            h_pit[t * 3 + 1] = pair_int_trip_map[t][1];
+            h_pit[t * 3 + 2] = pair_int_trip_map[t][2];
+        }
+    }
+
+    // ----- 4B -----
+
+    int n_quads  = static_cast<int>(chimes_4b_params.size());
+    int order_4b = (poly_orders.size() > 2) ? poly_orders[2] : 0;
+
+    int total_4b = 0;
+    vector<int> offset_4b(n_quads + 1, 0);
+    for (int q = 0; q < n_quads; q++) {
+        offset_4b[q] = total_4b;
+        total_4b    += ncoeffs_4b[q];
+    }
+    offset_4b[n_quads] = total_4b;
+
+    vector<double> h_params_4b(total_4b > 0 ? total_4b : 1);
+    vector<int>    h_pows_4b(total_4b > 0 ? total_4b * 6 : 1);
+    vector<double> h_cutoff_4b(n_quads > 0 ? n_quads * 12 : 1);  // [q][in_out][pair] → q*12 + in_out*6 + pair
+
+    for (int q = 0; q < n_quads; q++) {
+        int base = offset_4b[q];
+        for (int c = 0; c < ncoeffs_4b[q]; c++) {
+            h_params_4b[base + c] = chimes_4b_params[q][c];
+            for (int p = 0; p < 6; p++)
+                h_pows_4b[(base + c) * 6 + p] = chimes_4b_powers[q][c][p];
+        }
+        for (int io = 0; io < 2; io++)
+            for (int p = 0; p < 6; p++)
+                h_cutoff_4b[q * 12 + io * 6 + p] = chimes_4b_cutoff[q][io][p];
+    }
+
+    int quad_map_size = natmtyps * natmtyps * natmtyps * natmtyps;
+    vector<int> h_piq(quad_map_size * 6, -1);
+    if (!pair_int_quad_map.empty()) {
+        for (int q = 0; q < quad_map_size; q++) {
+            if (pair_int_quad_map[q].size() == 6) {
+                for (int p = 0; p < 6; p++)
+                    h_piq[q * 6 + p] = pair_int_quad_map[q][p];
+            }
+        }
+    }
+
+    // ----- fcut + penalty -----
+
+    int    fcut_type_int = (fcut_type == fcutType::CUBIC) ? 0 : 1;
+
+    // ----- Call the CUDA upload function -----
+
+    chimesFF_gpu_upload_params_flat(
+        n_pairs, order_2b,
+        ncoeffs_2b.data(), offset_2b.data(), total_2b,
+        h_params_2b.data(), h_pows_2b.data(),
+        h_cutoff_2b.data(), h_morse.data(),
+        atom_int_pair_map.data(), pair_map_size,
+        n_trips, order_3b,
+        ncoeffs_3b.data(), offset_3b.data(), total_3b,
+        h_params_3b.data(), h_pows_3b.data(),
+        h_cutoff_3b.data(),
+        atom_int_trip_map.data(), trip_map_size,
+        h_pit.data(), trip_map_size,
+        n_quads, order_4b,
+        ncoeffs_4b.data(), offset_4b.data(), total_4b,
+        h_params_4b.data(), h_pows_4b.data(),
+        h_cutoff_4b.data(),
+        atom_int_quad_map.empty() ? nullptr : atom_int_quad_map.data(), quad_map_size,
+        h_piq.data(), quad_map_size,
+        natmtyps, fcut_type_int, fcut_var,
+        penalty_params.data()
+    );
+}
+
+void chimesFF::free_device_params()
+{
+    chimesFF_gpu_free_params();
+}
+
+#endif // USE_CUDA
 

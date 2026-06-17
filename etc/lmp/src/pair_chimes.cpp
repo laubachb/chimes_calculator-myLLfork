@@ -98,6 +98,19 @@ PairCHIMES::PairCHIMES(LAMMPS *lmp) : Pair(lmp)
 	
 	tmp_3mer.resize(3);
 	tmp_4mer.resize(4);   
+
+#ifdef USE_CUDA
+	// Zero-initialise all GPU pointers; real allocation is deferred to coeff().
+	h_dx_2b=nullptr; h_dr_2b=nullptr; h_typ_2b=nullptr; h_ai_2b=nullptr; h_aj_2b=nullptr; cap_2b=0;
+	h_dx_3b=nullptr; h_dr_3b=nullptr; h_typ_3b=nullptr; h_ai_3b=nullptr; h_aj_3b=nullptr; h_ak_3b=nullptr; cap_3b=0;
+	h_dx_4b=nullptr; h_dr_4b=nullptr; h_typ_4b=nullptr; h_ai_4b=nullptr; h_aj_4b=nullptr; h_ak_4b=nullptr; h_al_4b=nullptr; cap_4b=0;
+	d_dx_2b=nullptr; d_dr_2b=nullptr; d_typ_2b=nullptr; d_ai_2b=nullptr; d_aj_2b=nullptr;
+	d_dx_3b=nullptr; d_dr_3b=nullptr; d_typ_3b=nullptr; d_ai_3b=nullptr; d_aj_3b=nullptr; d_ak_3b=nullptr;
+	d_dx_4b=nullptr; d_dr_4b=nullptr; d_typ_4b=nullptr; d_ai_4b=nullptr; d_aj_4b=nullptr; d_ak_4b=nullptr; d_al_4b=nullptr;
+	d_forces_out=nullptr; d_energy_out=nullptr;
+	h_forces_out=nullptr; h_energy_gpu=0.0;
+	out_natoms=0; gpu_ready=false;
+#endif
 	
 	if (chimes_calculator.rank == 0)
 	{ 
@@ -120,6 +133,11 @@ PairCHIMES::~PairCHIMES()
     
     if (badness_stream.is_open())
         badness_stream.close();
+
+#ifdef USE_CUDA
+	chimes_calculator.free_device_params();
+	free_gpu_buffers();
+#endif
 }	
 
 void PairCHIMES::settings(int narg, char **arg)
@@ -219,19 +237,14 @@ void PairCHIMES::coeff(int narg, char **arg)
 	}
 
 	maxcut_3b = chimes_calculator.max_cutoff_3B();
-	// if (maxcut_3b==0.0 && fingerprint){
-	// 	double max_val = 20;
-	// 	for (const auto& row : cutoff_2b) {
-	// 		for (double val : row) {
-	// 			if (val > max_val) {
-	// 				max_val = val;
-	// 			}
-	// 		}
-	// 	}
-	// 	maxcut_3b=max_val;
-	// }
 	maxcut_4b = chimes_calculator.max_cutoff_4B();
-	// if (maxcut_4b==0.0 && fingerprint){maxcut_4b=maxcut_3b;}
+
+#ifdef USE_CUDA
+	chimes_calculator.upload_params_to_device();
+	init_gpu_buffers();
+	if (chimes_calculator.rank == 0)
+		std::cout << "chimesFF: GPU acceleration enabled (USE_CUDA build)." << std::endl;
+#endif
 }
 void writeClusterDataComp(const string& filename, const vector<vector<double>>& data) 
 {
@@ -521,6 +534,38 @@ void PairCHIMES::compute(int eflag, int vflag)
 		vflag_fdotr = 0;
   		vflag_atom  = 0;
 	}
+
+	// ------------------------------------------------------------------
+	// GPU fast path: bypass per-cluster CPU loops.
+	// Requirements: GPU buffers ready, no TABULATION, no FINGERPRINT,
+	// and no per-atom energy/virial (eflag_atom / vflag_atom).
+	// When any of those conditions is unmet we fall through to the
+	// original CPU path below unchanged.
+	// ------------------------------------------------------------------
+#ifdef USE_CUDA
+	{
+		bool use_gpu = gpu_ready && !eflag_atom && !vflag_atom;
+#ifdef TABULATION
+		if (chimes_calculator.tabulate_2B || chimes_calculator.tabulate_3B)
+			use_gpu = false;
+#endif
+#ifdef FINGERPRINT
+		if (fingerprint) use_gpu = false;
+#endif
+		if (use_gpu) {
+			// Rebuild many-body neighbour lists when LAMMPS list is stale
+			if (neighbor->ago == 0) {
+				if (chimes_calculator.rank == 0)
+					std::cout << "Updating chimesFF neighbor lists (GPU path)..." << std::endl;
+				build_mb_neighlists();
+			}
+			chimes_calculator.reset_badness();
+			compute_gpu(eflag, vflag);
+			if (vflag_fdotr) virial_fdotr_compute();
+			return;
+		}
+	}
+#endif
 
 	// Compile if fingerprinting desired
 #ifdef FINGERPRINT
@@ -830,6 +875,324 @@ if (vflag_fdotr)
 	return;
 }
 
+// ============================================================
+// GPU buffer management (compiled only with USE_CUDA)
+// ============================================================
+
+#ifdef USE_CUDA
+#include <cuda_runtime.h>
+
+#define PC_CUDA_CHECK(e) do { \
+    cudaError_t _e = (e); \
+    if (_e != cudaSuccess) { \
+        fprintf(stderr,"pair_chimes CUDA error %s:%d: %s\n", \
+                __FILE__,__LINE__,cudaGetErrorString(_e)); \
+        exit(EXIT_FAILURE); \
+    } \
+} while(0)
+
+void PairCHIMES::init_gpu_buffers()
+{
+    // Allocate the scalar energy device buffer once.
+    if (!d_energy_out)
+        PC_CUDA_CHECK(cudaMalloc(&d_energy_out, sizeof(double)));
+    gpu_ready = true;
+}
+
+void PairCHIMES::free_gpu_buffers()
+{
+    if (!gpu_ready) return;
+    // Host batch arrays
+    delete[] h_dx_2b;  delete[] h_dr_2b;  delete[] h_typ_2b;
+    delete[] h_ai_2b;  delete[] h_aj_2b;
+    delete[] h_dx_3b;  delete[] h_dr_3b;  delete[] h_typ_3b;
+    delete[] h_ai_3b;  delete[] h_aj_3b;  delete[] h_ak_3b;
+    delete[] h_dx_4b;  delete[] h_dr_4b;  delete[] h_typ_4b;
+    delete[] h_ai_4b;  delete[] h_aj_4b;  delete[] h_ak_4b;  delete[] h_al_4b;
+    // Device batch arrays
+    cudaFree(d_dx_2b); cudaFree(d_dr_2b); cudaFree(d_typ_2b);
+    cudaFree(d_ai_2b); cudaFree(d_aj_2b);
+    cudaFree(d_dx_3b); cudaFree(d_dr_3b); cudaFree(d_typ_3b);
+    cudaFree(d_ai_3b); cudaFree(d_aj_3b); cudaFree(d_ak_3b);
+    cudaFree(d_dx_4b); cudaFree(d_dr_4b); cudaFree(d_typ_4b);
+    cudaFree(d_ai_4b); cudaFree(d_aj_4b); cudaFree(d_ak_4b); cudaFree(d_al_4b);
+    // Output arrays
+    cudaFree(d_forces_out);
+    cudaFree(d_energy_out);
+    delete[] h_forces_out;
+    gpu_ready = false;
+}
+
+// Grow 2B batch arrays to hold at least n entries (doubles capacity each time).
+void PairCHIMES::ensure_batch_2b(int n)
+{
+    if (n <= cap_2b) return;
+    int nc = (cap_2b < 1024) ? 1024 : cap_2b * 2;
+    if (nc < n) nc = n;
+    delete[] h_dx_2b;  delete[] h_dr_2b;  delete[] h_typ_2b;
+    delete[] h_ai_2b;  delete[] h_aj_2b;
+    cudaFree(d_dx_2b); cudaFree(d_dr_2b); cudaFree(d_typ_2b);
+    cudaFree(d_ai_2b); cudaFree(d_aj_2b);
+    h_dx_2b  = new double[nc];      h_dr_2b  = new double[nc*3];
+    h_typ_2b = new int   [nc*2];    h_ai_2b  = new int   [nc];    h_aj_2b = new int[nc];
+    PC_CUDA_CHECK(cudaMalloc(&d_dx_2b,  sizeof(double)*nc));
+    PC_CUDA_CHECK(cudaMalloc(&d_dr_2b,  sizeof(double)*nc*3));
+    PC_CUDA_CHECK(cudaMalloc(&d_typ_2b, sizeof(int)*nc*2));
+    PC_CUDA_CHECK(cudaMalloc(&d_ai_2b,  sizeof(int)*nc));
+    PC_CUDA_CHECK(cudaMalloc(&d_aj_2b,  sizeof(int)*nc));
+    cap_2b = nc;
+}
+
+void PairCHIMES::ensure_batch_3b(int n)
+{
+    if (n <= cap_3b) return;
+    int nc = (cap_3b < 512) ? 512 : cap_3b * 2;
+    if (nc < n) nc = n;
+    delete[] h_dx_3b;  delete[] h_dr_3b;  delete[] h_typ_3b;
+    delete[] h_ai_3b;  delete[] h_aj_3b;  delete[] h_ak_3b;
+    cudaFree(d_dx_3b); cudaFree(d_dr_3b); cudaFree(d_typ_3b);
+    cudaFree(d_ai_3b); cudaFree(d_aj_3b); cudaFree(d_ak_3b);
+    h_dx_3b  = new double[nc*3];    h_dr_3b  = new double[nc*9];
+    h_typ_3b = new int   [nc*3];
+    h_ai_3b  = new int   [nc];      h_aj_3b  = new int[nc];  h_ak_3b = new int[nc];
+    PC_CUDA_CHECK(cudaMalloc(&d_dx_3b,  sizeof(double)*nc*3));
+    PC_CUDA_CHECK(cudaMalloc(&d_dr_3b,  sizeof(double)*nc*9));
+    PC_CUDA_CHECK(cudaMalloc(&d_typ_3b, sizeof(int)*nc*3));
+    PC_CUDA_CHECK(cudaMalloc(&d_ai_3b,  sizeof(int)*nc));
+    PC_CUDA_CHECK(cudaMalloc(&d_aj_3b,  sizeof(int)*nc));
+    PC_CUDA_CHECK(cudaMalloc(&d_ak_3b,  sizeof(int)*nc));
+    cap_3b = nc;
+}
+
+void PairCHIMES::ensure_batch_4b(int n)
+{
+    if (n <= cap_4b) return;
+    int nc = (cap_4b < 256) ? 256 : cap_4b * 2;
+    if (nc < n) nc = n;
+    delete[] h_dx_4b;  delete[] h_dr_4b;  delete[] h_typ_4b;
+    delete[] h_ai_4b;  delete[] h_aj_4b;  delete[] h_ak_4b;  delete[] h_al_4b;
+    cudaFree(d_dx_4b); cudaFree(d_dr_4b); cudaFree(d_typ_4b);
+    cudaFree(d_ai_4b); cudaFree(d_aj_4b); cudaFree(d_ak_4b); cudaFree(d_al_4b);
+    h_dx_4b  = new double[nc*6];    h_dr_4b  = new double[nc*18];
+    h_typ_4b = new int   [nc*4];
+    h_ai_4b  = new int[nc]; h_aj_4b = new int[nc]; h_ak_4b = new int[nc]; h_al_4b = new int[nc];
+    PC_CUDA_CHECK(cudaMalloc(&d_dx_4b,  sizeof(double)*nc*6));
+    PC_CUDA_CHECK(cudaMalloc(&d_dr_4b,  sizeof(double)*nc*18));
+    PC_CUDA_CHECK(cudaMalloc(&d_typ_4b, sizeof(int)*nc*4));
+    PC_CUDA_CHECK(cudaMalloc(&d_ai_4b,  sizeof(int)*nc));
+    PC_CUDA_CHECK(cudaMalloc(&d_aj_4b,  sizeof(int)*nc));
+    PC_CUDA_CHECK(cudaMalloc(&d_ak_4b,  sizeof(int)*nc));
+    PC_CUDA_CHECK(cudaMalloc(&d_al_4b,  sizeof(int)*nc));
+    cap_4b = nc;
+}
+
+void PairCHIMES::ensure_output_arrays(int natoms)
+{
+    if (natoms <= out_natoms) return;
+    cudaFree(d_forces_out);
+    delete[] h_forces_out;
+    PC_CUDA_CHECK(cudaMalloc(&d_forces_out, sizeof(double)*natoms*3));
+    h_forces_out = new double[natoms*3];
+    out_natoms   = natoms;
+}
+
+// ============================================================
+// GPU-accelerated compute() path
+// ============================================================
+
+void PairCHIMES::compute_gpu(int eflag, int vflag)
+{
+    double **x     = atom->x;
+    double **f     = atom->f;
+    int    *type   = atom->type;
+    tagint *tag    = atom->tag;
+    int     nlocal = atom->nlocal;
+    int     natoms = atom->nlocal + atom->nghost;
+
+    int inum       = list->inum;
+    int *ilist     = list->ilist;
+    int *numneigh  = list->numneigh;
+    int **firstneigh = list->firstneigh;
+
+    // Size output arrays
+    ensure_output_arrays(natoms);
+
+    // Zero GPU output buffers for this step
+    PC_CUDA_CHECK(cudaMemset(d_forces_out, 0, sizeof(double)*natoms*3));
+    PC_CUDA_CHECK(cudaMemset(d_energy_out, 0, sizeof(double)));
+
+    // --------------------------------------------------
+    // 1-body energy (stays on CPU – trivial)
+    // --------------------------------------------------
+
+    double energy_1b = 0.0;
+    for (int ii = 0; ii < inum; ii++) {
+        int i = ilist[ii];
+        double e1b = 0.0;
+        chimes_calculator.compute_1B(chimes_type[type[i]-1], e1b);
+        energy_1b += e1b;
+    }
+    if (eflag_global) eng_vdwl += energy_1b;
+
+    // --------------------------------------------------
+    // Build 2B batch
+    // --------------------------------------------------
+
+    int n2b = 0;
+    for (int ii = 0; ii < inum; ii++) {
+        int i     = ilist[ii];
+        tagint itag = tag[i];
+        int   jnum  = numneigh[i];
+        int  *jlist = firstneigh[i];
+
+        for (int jj = 0; jj < jnum; jj++) {
+            int j = jlist[jj];
+            tagint jtag = tag[j];
+            j &= NEIGHMASK;
+            if (jtag <= itag) continue;
+
+            ensure_batch_2b(n2b + 1);
+            double ldr[3];
+            double ldx = get_dist(i, j, ldr);
+            h_dx_2b[n2b]       = ldx;
+            h_dr_2b[n2b*3+0]   = ldr[0];
+            h_dr_2b[n2b*3+1]   = ldr[1];
+            h_dr_2b[n2b*3+2]   = ldr[2];
+            h_typ_2b[n2b*2+0]  = chimes_type[type[i]-1];
+            h_typ_2b[n2b*2+1]  = chimes_type[type[j]-1];
+            h_ai_2b[n2b]       = i;
+            h_aj_2b[n2b]       = j;
+            n2b++;
+        }
+    }
+
+    // --------------------------------------------------
+    // Build 3B batch
+    // --------------------------------------------------
+
+    int n3b = 0;
+    if (chimes_calculator.poly_orders[1] > 0) {
+        for (int ii = 0; ii < (int)neighborlist_3mers.size(); ii++) {
+            int i = neighborlist_3mers[ii][0];
+            int j = neighborlist_3mers[ii][1];
+            int k = neighborlist_3mers[ii][2];
+
+            ensure_batch_3b(n3b + 1);
+            double ldr3[9];
+            h_dx_3b[n3b*3+0] = get_dist(i, j, &ldr3[0]);
+            h_dx_3b[n3b*3+1] = get_dist(i, k, &ldr3[3]);
+            h_dx_3b[n3b*3+2] = get_dist(j, k, &ldr3[6]);
+            for (int d = 0; d < 9; d++) h_dr_3b[n3b*9+d] = ldr3[d];
+            h_typ_3b[n3b*3+0] = chimes_type[type[i]-1];
+            h_typ_3b[n3b*3+1] = chimes_type[type[j]-1];
+            h_typ_3b[n3b*3+2] = chimes_type[type[k]-1];
+            h_ai_3b[n3b] = i;  h_aj_3b[n3b] = j;  h_ak_3b[n3b] = k;
+            n3b++;
+        }
+    }
+
+    // --------------------------------------------------
+    // Build 4B batch
+    // --------------------------------------------------
+
+    int n4b = 0;
+    if (chimes_calculator.poly_orders[2] > 0) {
+        for (int ii = 0; ii < (int)neighborlist_4mers.size(); ii++) {
+            int i = neighborlist_4mers[ii][0];
+            int j = neighborlist_4mers[ii][1];
+            int k = neighborlist_4mers[ii][2];
+            int l = neighborlist_4mers[ii][3];
+
+            ensure_batch_4b(n4b + 1);
+            double ldr4[18];
+            h_dx_4b[n4b*6+0] = get_dist(i, j, &ldr4[0]);
+            h_dx_4b[n4b*6+1] = get_dist(i, k, &ldr4[3]);
+            h_dx_4b[n4b*6+2] = get_dist(i, l, &ldr4[6]);
+            h_dx_4b[n4b*6+3] = get_dist(j, k, &ldr4[9]);
+            h_dx_4b[n4b*6+4] = get_dist(j, l, &ldr4[12]);
+            h_dx_4b[n4b*6+5] = get_dist(k, l, &ldr4[15]);
+            for (int d = 0; d < 18; d++) h_dr_4b[n4b*18+d] = ldr4[d];
+            h_typ_4b[n4b*4+0] = chimes_type[type[i]-1];
+            h_typ_4b[n4b*4+1] = chimes_type[type[j]-1];
+            h_typ_4b[n4b*4+2] = chimes_type[type[k]-1];
+            h_typ_4b[n4b*4+3] = chimes_type[type[l]-1];
+            h_ai_4b[n4b]=i; h_aj_4b[n4b]=j; h_ak_4b[n4b]=k; h_al_4b[n4b]=l;
+            n4b++;
+        }
+    }
+
+    // --------------------------------------------------
+    // Host → Device transfers
+    // --------------------------------------------------
+
+    if (n2b > 0) {
+        PC_CUDA_CHECK(cudaMemcpy(d_dx_2b,  h_dx_2b,  sizeof(double)*n2b,   cudaMemcpyHostToDevice));
+        PC_CUDA_CHECK(cudaMemcpy(d_dr_2b,  h_dr_2b,  sizeof(double)*n2b*3, cudaMemcpyHostToDevice));
+        PC_CUDA_CHECK(cudaMemcpy(d_typ_2b, h_typ_2b, sizeof(int)*n2b*2,    cudaMemcpyHostToDevice));
+        PC_CUDA_CHECK(cudaMemcpy(d_ai_2b,  h_ai_2b,  sizeof(int)*n2b,      cudaMemcpyHostToDevice));
+        PC_CUDA_CHECK(cudaMemcpy(d_aj_2b,  h_aj_2b,  sizeof(int)*n2b,      cudaMemcpyHostToDevice));
+    }
+    if (n3b > 0) {
+        PC_CUDA_CHECK(cudaMemcpy(d_dx_3b,  h_dx_3b,  sizeof(double)*n3b*3, cudaMemcpyHostToDevice));
+        PC_CUDA_CHECK(cudaMemcpy(d_dr_3b,  h_dr_3b,  sizeof(double)*n3b*9, cudaMemcpyHostToDevice));
+        PC_CUDA_CHECK(cudaMemcpy(d_typ_3b, h_typ_3b, sizeof(int)*n3b*3,    cudaMemcpyHostToDevice));
+        PC_CUDA_CHECK(cudaMemcpy(d_ai_3b,  h_ai_3b,  sizeof(int)*n3b,      cudaMemcpyHostToDevice));
+        PC_CUDA_CHECK(cudaMemcpy(d_aj_3b,  h_aj_3b,  sizeof(int)*n3b,      cudaMemcpyHostToDevice));
+        PC_CUDA_CHECK(cudaMemcpy(d_ak_3b,  h_ak_3b,  sizeof(int)*n3b,      cudaMemcpyHostToDevice));
+    }
+    if (n4b > 0) {
+        PC_CUDA_CHECK(cudaMemcpy(d_dx_4b,  h_dx_4b,  sizeof(double)*n4b*6,  cudaMemcpyHostToDevice));
+        PC_CUDA_CHECK(cudaMemcpy(d_dr_4b,  h_dr_4b,  sizeof(double)*n4b*18, cudaMemcpyHostToDevice));
+        PC_CUDA_CHECK(cudaMemcpy(d_typ_4b, h_typ_4b, sizeof(int)*n4b*4,     cudaMemcpyHostToDevice));
+        PC_CUDA_CHECK(cudaMemcpy(d_ai_4b,  h_ai_4b,  sizeof(int)*n4b,       cudaMemcpyHostToDevice));
+        PC_CUDA_CHECK(cudaMemcpy(d_aj_4b,  h_aj_4b,  sizeof(int)*n4b,       cudaMemcpyHostToDevice));
+        PC_CUDA_CHECK(cudaMemcpy(d_ak_4b,  h_ak_4b,  sizeof(int)*n4b,       cudaMemcpyHostToDevice));
+        PC_CUDA_CHECK(cudaMemcpy(d_al_4b,  h_al_4b,  sizeof(int)*n4b,       cudaMemcpyHostToDevice));
+    }
+
+    // --------------------------------------------------
+    // GPU kernel launches (asynchronous)
+    // --------------------------------------------------
+
+    chimesFF_gpu_compute_2B(n2b, d_dx_2b, d_dr_2b, d_typ_2b, d_ai_2b, d_aj_2b,
+                             natoms, d_forces_out, d_energy_out);
+    chimesFF_gpu_compute_3B(n3b, d_dx_3b, d_dr_3b, d_typ_3b, d_ai_3b, d_aj_3b, d_ak_3b,
+                             natoms, d_forces_out, d_energy_out);
+    chimesFF_gpu_compute_4B(n4b, d_dx_4b, d_dr_4b, d_typ_4b, d_ai_4b, d_aj_4b, d_ak_4b, d_al_4b,
+                             natoms, d_forces_out, d_energy_out);
+
+    // Synchronise before copying results back
+    PC_CUDA_CHECK(cudaDeviceSynchronize());
+
+    // --------------------------------------------------
+    // Device → Host transfers
+    // --------------------------------------------------
+
+    PC_CUDA_CHECK(cudaMemcpy(h_forces_out, d_forces_out, sizeof(double)*natoms*3, cudaMemcpyDeviceToHost));
+    PC_CUDA_CHECK(cudaMemcpy(&h_energy_gpu, d_energy_out, sizeof(double),          cudaMemcpyDeviceToHost));
+
+    // --------------------------------------------------
+    // Scatter forces into LAMMPS f[]
+    // --------------------------------------------------
+
+    for (int i = 0; i < natoms; i++) {
+        f[i][0] += h_forces_out[i*3+0];
+        f[i][1] += h_forces_out[i*3+1];
+        f[i][2] += h_forces_out[i*3+2];
+    }
+
+    // Energy accounting
+    if (eflag_global) eng_vdwl += h_energy_gpu;
+
+    // Virial is handled by virial_fdotr_compute() at the end of compute()
+    // since we have a full ghost-atom neighbor list (REQ_GHOST).
+    // Per-atom energy/virial (eflag_atom/vflag_atom) are not GPU-accelerated;
+    // if needed, rebuild with CPU path or add per-atom accumulators on GPU.
+}
+
+#endif // USE_CUDA
+
+// ============================================================
 void PairCHIMES::set_chimes_type()
 {
 	if(comm->me == 0)

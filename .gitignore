@@ -2,6 +2,7 @@ etc/lmp/tests/*/correct_output/*
 
 # Build / install outputs (do not commit)
 build/
+build_*/
 **/CMakeFiles/
 CMakeCache.txt
 cmake_install.cmake
@@ -16,8 +17,17 @@ install_manifest.txt
 *.mod
 *.MOD
 
+# CUDA intermediate outputs
+*.ptx
+*.cubin
+*.fatbin
+*.nvfatbin
+
 # Local build logs
 etc/lmp/build.err
 
 # Local vendored LAMMPS checkout (keep out of git)
 etc/lammps/
+
+# Test run artefacts (GPU validation produces no persistent output by design)
+chimescalc-gpu-validate

@@ -61,6 +61,132 @@ See [the documentation](https://chimes-calculator.readthedocs.io/en/latest/citin
 
 <hr>
 
+GPU Acceleration (CUDA)
+-----------------------
+
+This fork adds optional CUDA GPU acceleration for ChIMES force evaluation.
+All changes are guarded by `#ifdef USE_CUDA`; CPU-only builds are unaffected.
+
+### How it works
+
+The three hot loops in `chimesFF::compute_2B/3B/4B` are replaced with a
+single-pass GPU path when the LAMMPS pair style is active:
+
+1. A single pass over the LAMMPS neighbour list builds compact batched arrays
+   (distances, displacement vectors, atom-type indices).
+2. One kernel launch per body order processes all clusters in parallel — one
+   GPU thread per cluster. Chebyshev polynomials and cutoff functions are
+   evaluated on-device; forces are accumulated with `atomicAdd`.
+3. Resulting forces are copied back to host and scattered into LAMMPS `f[]`.
+   Energy is added to `eng_vdwl`; the global virial is handled by the
+   standard LAMMPS `virial_fdotr_compute()` from the accumulated forces.
+
+ChIMES parameters (coefficients, cutoffs, Morse lambdas, type maps) are
+uploaded to GPU constant memory **once** after `pair_coeff` and reused for
+every timestep.
+
+### Requirements
+
+- NVIDIA GPU with Compute Capability ≥ 6.0 (A100 = SM 80, H100 = SM 90)
+- CUDA Toolkit ≥ 11.0
+- CMake ≥ 3.18
+
+### Building the ChIMES library with GPU support
+
+```bash
+# On Stampede3 (H100 nodes):
+module load gcc/13.2.0 cuda/12.8
+
+cmake -B build_gpu \
+      -DWITH_CUDA=ON \
+      -DCUDA_ARCH=90 \        # 80 for A100, 90 for H100
+      -DCMAKE_BUILD_TYPE=Release \
+      .
+cmake --build build_gpu -j8
+```
+
+The resulting `build_gpu/libchimescalc.so` links against the CUDA runtime and
+contains device code for all three body orders.
+
+For A100 nodes (SM 80):
+
+```bash
+cmake -B build_gpu -DWITH_CUDA=ON -DCUDA_ARCH=80 .
+cmake --build build_gpu -j8
+```
+
+### Using GPU acceleration with LAMMPS
+
+Build LAMMPS against the GPU-enabled `libchimescalc.so` following the
+standard instructions in `etc/lmp/`. No changes to the LAMMPS input script
+are required. The GPU path activates automatically when:
+
+- The build was compiled with `USE_CUDA`, and
+- No per-atom energy/virial output is requested (i.e. `eflag_atom = vflag_atom = 0`).
+
+If per-atom thermodynamic quantities or `TABULATION`/`FINGERPRINT` mode are
+requested, the code falls back silently to the original CPU path.
+
+### GPU vs CPU validation test
+
+A standalone test executable validates that GPU and CPU forces agree to
+within 1 × 10⁻⁹ eV/Å for random 2-body and 3-body cluster geometries:
+
+```bash
+# Build the test (requires WITH_CUDA=ON build):
+cmake --build build_gpu --target chimescalc-gpu-validate -j4
+
+# Run against the included liquid-carbon force field:
+./build_gpu/chimescalc-gpu-validate \
+    serial_interface/tests/force_fields/published_params.liqC.2+3b.cubic.txt
+```
+
+Expected output (timings will vary by GPU):
+
+```
+Loaded: 1 atom types, 2B order 12, 3B enabled
+2B cutoff: [1.000, 3.150]
+...
+=== 2B Results (800 pairs, 120 atoms) ===
+  CPU energy:   ...
+  GPU energy:   ...
+  Energy abs error:   <1e-11   rel error: <1e-11
+  Force  max abs err: <1e-11   max rel:   <1e-13
+  2B: PASS
+
+=== 3B Results (400 triplets, 120 atoms) ===
+  ...
+  3B: PASS
+
+=== Overall: ALL PASS ===
+```
+
+> **Note on non-determinism:** GPU floating-point reductions (`atomicAdd`)
+> are non-associative, so GPU energies and forces may differ from CPU results
+> by ≈ 10⁻¹² – 10⁻¹⁰ eV (machine-epsilon level).  This is the standard
+> trade-off for GPU parallelism and does not affect physical observables.
+
+### New files
+
+| File | Purpose |
+|------|---------|
+| `chimesFF/src/chimesFF_gpu.cuh` | C++ interface to GPU kernels (no CUDA headers required by callers) |
+| `chimesFF/src/chimesFF_gpu.cu`  | CUDA kernels: `k2B`, `k3B`, `k4B`; parameter upload/teardown |
+| `chimesFF/tests/gpu_validate/test_gpu_cpu.cu` | GPU vs CPU validation test |
+
+### Modified files
+
+| File | Change |
+|------|--------|
+| `config.cmake` | `WITH_CUDA` option and `CUDA_ARCH` cache variable |
+| `CMakeLists.txt` | CUDA language, sources, definitions, test target |
+| `chimesFF/src/chimesFF.h` | `upload_params_to_device()` / `free_device_params()` |
+| `chimesFF/src/chimesFF.cpp` | Implementation of the above |
+| `etc/lmp/src/pair_chimes.h` | GPU batch-array members and helper declarations |
+| `etc/lmp/src/pair_chimes.cpp` | `compute_gpu()`, buffer management, `compute()` dispatch |
+
+<hr>
+
 License
 ----------------
 

@@ -18,6 +18,16 @@ option(BUILD_SHARED_LIBS "Whether the libraries built should be shared" TRUE)
 # (You can still select subsets of the selected tests by name using the -R option of ctest)
 set(TEST_LABELS ".*" CACHE STRING "List of test label regexps to include as test in CMake builds")
 
+# Enable CUDA GPU acceleration for chimesFF inference
+# When ON, chimesFF_gpu.cu is compiled and USE_CUDA is defined for all targets.
+# Requires an NVIDIA GPU and a CUDA toolkit installation.
+# CPU-only builds are unaffected when this is OFF (the default).
+option(WITH_CUDA "Enable CUDA GPU acceleration for chimesFF" OFF)
+
+# Target CUDA architecture(s).  Separate multiple values with semicolons, e.g. "80;90".
+# Common values: 80 = A100, 90 = H100 (Stampede3 GPU nodes), 75 = V100
+set(CUDA_ARCH "90" CACHE STRING "CUDA SM architecture number(s) (e.g. 80 for A100, 90 for H100)")
+
 
 # C++ compiler dependent config options
 if("GNU" STREQUAL "${CMAKE_CXX_COMPILER_ID}")

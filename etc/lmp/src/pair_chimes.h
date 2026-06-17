@@ -28,6 +28,9 @@ PairStyle(chimesFF,PairCHIMES); // PairStyle(key, class)
 #include "pair.h"
 
 #include "chimesFF.h"
+#ifdef USE_CUDA
+#  include "chimesFF_gpu.cuh"
+#endif
 #include <vector>	
 
 
@@ -120,15 +123,69 @@ namespace LAMMPS_NS
 		    inline double get_dist(int i, int j);
 			void   set_chimes_type();
 
-			// Functions I haven't worked on 
-						
-			void write_restart();		
-			void read_restart();				
-			void write_restart_settings();	
-			void read_restart_settings();
-			void single();	
+		// Functions I haven't worked on 
+					
+		void write_restart();		
+		void read_restart();				
+		void write_restart_settings();	
+		void read_restart_settings();
+		void single();
 
-		};
+		// --------------------------------------------------------
+		// GPU batch-evaluation path (compiled only with USE_CUDA)
+		// --------------------------------------------------------
+#ifdef USE_CUDA
+		// Called from coeff() after parameter upload; safe to call again.
+		void init_gpu_buffers();
+		// Called from destructor.
+		void free_gpu_buffers();
+
+		// Ensure host + device batch arrays can hold at least n entries.
+		void ensure_batch_2b(int n);
+		void ensure_batch_3b(int n);
+		void ensure_batch_4b(int n);
+		// Ensure output force/energy arrays are sized for natoms atoms.
+		void ensure_output_arrays(int natoms);
+
+		// Executes GPU-accelerated 1B+2B+3B+4B compute and returns.
+		// Called from compute() when GPU is active.
+		void compute_gpu(int eflag, int vflag);
+
+		// GPU batch input arrays (host-side, raw new[]/delete[])
+		double *h_dx_2b, *h_dr_2b;
+		int    *h_typ_2b, *h_ai_2b, *h_aj_2b;
+		int     cap_2b;
+
+		double *h_dx_3b, *h_dr_3b;
+		int    *h_typ_3b, *h_ai_3b, *h_aj_3b, *h_ak_3b;
+		int     cap_3b;
+
+		double *h_dx_4b, *h_dr_4b;
+		int    *h_typ_4b, *h_ai_4b, *h_aj_4b, *h_ak_4b, *h_al_4b;
+		int     cap_4b;
+
+		// GPU batch input arrays (device-side)
+		double *d_dx_2b, *d_dr_2b;
+		int    *d_typ_2b, *d_ai_2b, *d_aj_2b;
+
+		double *d_dx_3b, *d_dr_3b;
+		int    *d_typ_3b, *d_ai_3b, *d_aj_3b, *d_ak_3b;
+
+		double *d_dx_4b, *d_dr_4b;
+		int    *d_typ_4b, *d_ai_4b, *d_aj_4b, *d_ak_4b, *d_al_4b;
+
+		// GPU output arrays (device-side)
+		double *d_forces_out;    // [natoms*3]  zeroed each step
+		double *d_energy_out;    // [1]         zeroed each step
+
+		// GPU output arrays (host-side mirrors)
+		double *h_forces_out;
+		double  h_energy_gpu;
+
+		int     out_natoms;      // current d_forces_out allocation size
+		bool    gpu_ready;       // true after init_gpu_buffers() succeeds
+#endif
+	};
 }	
 
 

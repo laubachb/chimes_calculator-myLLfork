@@ -337,6 +337,19 @@ private:
         
     void print_pretty_stuff();
 
+    ////////////////////////
+    // GPU acceleration
+    ////////////////////////
+#ifdef USE_CUDA
+public:
+    // Upload all parameters to GPU device memory (call once after read_parameters()
+    // and after build_pair_int_trip_map() / build_pair_int_quad_map()).
+    void upload_params_to_device();
+
+    // Release all GPU device memory allocated by upload_params_to_device().
+    void free_device_params();
+#endif
+
     inline double dr2_3B(const double *dr2, int i, int j, int k, int l) ;
     inline double dr2_4B(const double *dr2, int i, int j, int k, int l) ;
     inline void init_distance_tensor(double *dr2, const vector<double> & dr, int natoms)    ;
