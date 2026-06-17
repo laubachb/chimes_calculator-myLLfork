@@ -1037,6 +1037,17 @@ void PairCHIMES::compute_gpu(int eflag, int vflag)
     // --------------------------------------------------
     // Build 2B batch
     // --------------------------------------------------
+    // Pre-count so we can allocate once (avoids losing data across grows).
+
+    int n2b_total = 0;
+    for (int ii = 0; ii < inum; ii++) {
+        tagint itag = tag[ilist[ii]];
+        int *jlist_i = firstneigh[ilist[ii]];
+        for (int jj = 0; jj < numneigh[ilist[ii]]; jj++) {
+            if (tag[jlist_i[jj]] > itag) n2b_total++;
+        }
+    }
+    ensure_batch_2b(n2b_total);
 
     int n2b = 0;
     for (int ii = 0; ii < inum; ii++) {
@@ -1051,7 +1062,6 @@ void PairCHIMES::compute_gpu(int eflag, int vflag)
             j &= NEIGHMASK;
             if (jtag <= itag) continue;
 
-            ensure_batch_2b(n2b + 1);
             double ldr[3];
             double ldx = get_dist(i, j, ldr);
             h_dx_2b[n2b]       = ldx;
@@ -1069,15 +1079,16 @@ void PairCHIMES::compute_gpu(int eflag, int vflag)
     // --------------------------------------------------
     // Build 3B batch
     // --------------------------------------------------
+    // Pre-allocate exactly what we need (count is already known).
 
     int n3b = 0;
     if (chimes_calculator.poly_orders[1] > 0) {
+        ensure_batch_3b((int)neighborlist_3mers.size());
         for (int ii = 0; ii < (int)neighborlist_3mers.size(); ii++) {
             int i = neighborlist_3mers[ii][0];
             int j = neighborlist_3mers[ii][1];
             int k = neighborlist_3mers[ii][2];
 
-            ensure_batch_3b(n3b + 1);
             double ldr3[9];
             h_dx_3b[n3b*3+0] = get_dist(i, j, &ldr3[0]);
             h_dx_3b[n3b*3+1] = get_dist(i, k, &ldr3[3]);
@@ -1094,16 +1105,17 @@ void PairCHIMES::compute_gpu(int eflag, int vflag)
     // --------------------------------------------------
     // Build 4B batch
     // --------------------------------------------------
+    // Pre-allocate exactly what we need (count is already known).
 
     int n4b = 0;
     if (chimes_calculator.poly_orders[2] > 0) {
+        ensure_batch_4b((int)neighborlist_4mers.size());
         for (int ii = 0; ii < (int)neighborlist_4mers.size(); ii++) {
             int i = neighborlist_4mers[ii][0];
             int j = neighborlist_4mers[ii][1];
             int k = neighborlist_4mers[ii][2];
             int l = neighborlist_4mers[ii][3];
 
-            ensure_batch_4b(n4b + 1);
             double ldr4[18];
             h_dx_4b[n4b*6+0] = get_dist(i, j, &ldr4[0]);
             h_dx_4b[n4b*6+1] = get_dist(i, k, &ldr4[3]);
