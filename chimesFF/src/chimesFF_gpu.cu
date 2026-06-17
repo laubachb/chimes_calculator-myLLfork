@@ -583,6 +583,16 @@ void chimesFF_gpu_free_params()
 // Kernel launchers
 // ============================================================
 
+// Per-kernel synchronize + error check used for debugging
+#define CUDA_KERNEL_CHECK(label) do {                                           \
+    cudaError_t _e = cudaDeviceSynchronize();                                   \
+    if (_e != cudaSuccess) {                                                    \
+        fprintf(stderr, "chimesFF GPU kernel [%s] failed: %s\n",               \
+                label, cudaGetErrorString(_e));                                 \
+        exit(EXIT_FAILURE);                                                     \
+    }                                                                           \
+} while (0)
+
 void chimesFF_gpu_compute_2B(
     int npairs,
     double *d_dx, double *d_dr, int *d_typ,
@@ -593,6 +603,7 @@ void chimesFF_gpu_compute_2B(
     int tpb    = 256;
     int blocks = (npairs + tpb - 1) / tpb;
     k2B<<<blocks, tpb>>>(npairs, d_dx, d_dr, d_typ, d_ai, d_aj, d_forces, d_energy);
+    CUDA_KERNEL_CHECK("k2B");
 }
 
 void chimesFF_gpu_compute_3B(
@@ -602,9 +613,10 @@ void chimesFF_gpu_compute_3B(
     int natoms, double *d_forces, double *d_energy)
 {
     if (ntriplets <= 0) return;
-    int tpb    = 128;  // fewer threads/block = more registers available per thread
+    int tpb    = 128;
     int blocks = (ntriplets + tpb - 1) / tpb;
     k3B<<<blocks, tpb>>>(ntriplets, d_dx, d_dr, d_typ, d_ai, d_aj, d_ak, d_forces, d_energy);
+    CUDA_KERNEL_CHECK("k3B");
 }
 
 void chimesFF_gpu_compute_4B(
@@ -614,9 +626,10 @@ void chimesFF_gpu_compute_4B(
     int natoms, double *d_forces, double *d_energy)
 {
     if (nquads <= 0) return;
-    int tpb    = 64;   // 4B uses the most stack per thread (6 Cheby sets)
+    int tpb    = 64;
     int blocks = (nquads + tpb - 1) / tpb;
     k4B<<<blocks, tpb>>>(nquads, d_dx, d_dr, d_typ, d_ai, d_aj, d_ak, d_al, d_forces, d_energy);
+    CUDA_KERNEL_CHECK("k4B");
 }
 
 #endif // USE_CUDA

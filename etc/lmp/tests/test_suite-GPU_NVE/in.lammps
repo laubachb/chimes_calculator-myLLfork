@@ -18,8 +18,8 @@ variable pressure            equal  30
 
 variable io_freq             equal  10
 
-variable data_file           string ../test_suite-NVE/diamond_3.21gcc_512atoms.data.in
-variable param_file          string ../../../../../serial_interface/tests/force_fields/published_params.Carbon-2.0.Small.2+3+4b.Tersoff.txt
+variable data_file           string diamond_3.21gcc_512atoms.data.in
+variable param_file          string params.txt
 
 ########################################
 # GENERAL CONTROLS
