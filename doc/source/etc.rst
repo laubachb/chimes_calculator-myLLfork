@@ -154,3 +154,126 @@ This pattern uses **hybrid ChIMES + MOMB** specifically to add **D2 dispersion c
     2. This capability is still under testing - please `let us know <https://groups.google.com/g/chimes_software>`_ if you observe strange behavior
     3. Assumes user wants single-atom energies to be added to the system energy. If you don't want to, zero the energy offsets in the parameter file
 
+
+GPU Acceleration (CUDA)
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+ChIMES supports optional CUDA GPU acceleration for force evaluation.
+All GPU code is guarded by ``#ifdef USE_CUDA``; CPU-only builds are unaffected.
+
+Requirements
+""""""""""""
+
+* NVIDIA GPU with Compute Capability ≥ 6.0 (Pascal or newer)
+* CUDA Toolkit ≥ 11.0
+* GCC ≥ 9 (Intel compilers are **not** supported for CUDA compilation)
+
+Identify your GPU's SM architecture before building::
+
+    nvidia-smi --query-gpu=name,compute_cap --format=csv,noheader
+
+Common SM architecture values:
+
+.. list-table::
+   :header-rows: 1
+
+   * - GPU
+     - SM arch
+     - ``CUDA_ARCH``
+   * - RTX PRO 6000 Blackwell / B200
+     - sm_120
+     - ``120``
+   * - H100
+     - sm_90
+     - ``90``
+   * - A100
+     - sm_80
+     - ``80``
+   * - A30 / A40 / RTX 3090
+     - sm_86
+     - ``86``
+   * - L40S / RTX 4090
+     - sm_89
+     - ``89``
+   * - V100
+     - sm_70
+     - ``70``
+
+Building GPU-enabled LAMMPS
+""""""""""""""""""""""""""""
+
+Navigate to ``etc/lmp`` and run ``install_gpu.sh`` with the SM architecture as its argument:
+
+.. code-block:: bash
+
+    # Example: Stampede3 with Blackwell GPUs (SM 120)
+    module load gcc/13.2.0 cuda/12.8
+    ./install_gpu.sh 120
+    # Binary: etc/lmp/exe/lmp_mpi_chimes_gpu
+
+    # Example: H100 (SM 90)
+    ./install_gpu.sh 90
+
+    # Example: A100 (SM 80)
+    ./install_gpu.sh 80
+
+No changes to the LAMMPS input script are required.  The GPU path
+activates automatically at runtime when the binary was compiled with
+``USE_CUDA`` and no per-atom energy/virial output is requested.  If
+per-atom thermo quantities, ``TABULATION``, or ``FINGERPRINT`` mode are
+requested, the pair style falls back silently to the CPU path.
+
+.. Note ::
+
+    On Stampede3, the ``cuda`` module requires GCC (not Intel) as its
+    host compiler.  Load modules in this order::
+
+        module load intel/24.0 impi/21.11 gcc/13.2.0 cuda/12.8 python/3.12.11
+
+
+Running the GPU test
+"""""""""""""""""""""
+
+A full LAMMPS GPU NVE test is provided in ``etc/lmp/tests/test_suite-GPU_NVE/``.
+It runs 100 NVE steps on 512 carbon atoms and compares GPU thermo output
+against the CPU reference within a tolerance of 1×10\ :sup:`-3`.
+
+On Stampede3 (batch submission)::
+
+    cd etc/lmp/tests/test_suite-GPU_NVE
+    sbatch submit_stampede3.slurm
+    # Results appear in current_output/
+
+For interactive runs::
+
+    idev -p rtx-small -N 1 -n 1 -t 00:30:00 -A <YOUR_ALLOCATION>
+    module load intel/24.0 impi/21.11 gcc/13.2.0 cuda/12.8 python/3.12.11
+    cd etc/lmp/tests/test_suite-GPU_NVE
+    ./run_gpu_test.sh
+
+See ``etc/lmp/tests/test_suite-GPU_NVE/README`` for complete details.
+
+Standalone GPU vs. CPU validation
+"""""""""""""""""""""""""""""""""""
+
+A standalone unit test executable validates that GPU and CPU forces agree
+to within 1×10\ :sup:`-9` eV/Å for random cluster geometries:
+
+.. code-block:: bash
+
+    # Build (requires WITH_CUDA=ON):
+    module load gcc/13.2.0 cuda/12.8
+    cmake -B build_gpu -DWITH_CUDA=ON -DCUDA_ARCH=<SM_ARCH> .
+    cmake --build build_gpu --target chimescalc-gpu-validate -j4
+
+    # Run against the included liquid-carbon force field:
+    ./build_gpu/chimescalc-gpu-validate \
+        serial_interface/tests/force_fields/published_params.liqC.2+3b.cubic.txt
+
+.. Note ::
+
+    GPU floating-point reductions (``atomicAdd``) are non-associative, so
+    GPU results may differ from CPU by ≈10\ :sup:`-12` – 10\ :sup:`-10` eV
+    (machine-epsilon level).  This is the standard trade-off for GPU
+    parallelism and does not affect physical observables.
+

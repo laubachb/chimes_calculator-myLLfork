@@ -18,3 +18,20 @@ Each example/test folder contains all the input you need to run the test in ques
 srun -n 36 ../exe/lmp_mpi_chimes -i in.lammps | tee out.lammps
 
 * To run the tabulation test, you need to install using "./install.sh TABULATION". To run the fingerprint test, you need to install using "./install.sh FINGERPRINT" and run the example via something like ./run_jobs.sh 36". See the scripts in question and documentation for additional details.
+
+
+GPU TEST:
+
+test_suite-GPU_NVE/ contains a GPU-accelerated NVE test for the CUDA build.
+It requires the GPU-enabled LAMMPS binary (exe/lmp_mpi_chimes_gpu) built via:
+
+    cd <repo>/etc/lmp
+    module load gcc/13.2.0 cuda/12.8   # or equivalent on your system
+    ./install_gpu.sh <SM_ARCH>          # e.g. 120 for Blackwell, 90 for H100
+
+The test must be run on a GPU compute node. On Stampede3:
+
+    cd test_suite-GPU_NVE
+    sbatch submit_stampede3.slurm
+
+See test_suite-GPU_NVE/README for full details.

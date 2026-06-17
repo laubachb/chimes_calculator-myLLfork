@@ -1,6 +1,5 @@
 /*
     ChIMES Calculator — CUDA GPU kernels
-    Branch: laubachb/gpu-acceleration
 
     This file implements batched GPU evaluation of 2-, 3-, and 4-body
     ChIMES interactions.  One GPU thread handles one cluster (pair /
@@ -23,8 +22,19 @@
       published ChIMES models).
     • The 4-body force scalar uses prefix/suffix products to avoid
       division-by-zero when any Tn[p][pw] == 0.
-    • atomicAdd(double*,double) requires SM ≥ 6.0 (Pascal); A100/H100
-      are SM 8.0/9.0, so this is unconditionally correct on Stampede3.
+    • atomicAdd(double*,double) requires SM ≥ 6.0 (Pascal); A100/H100/
+      Blackwell are SM 8.0/9.0/12.0, so this is unconditionally correct
+      on Stampede3 rtx-small and h100 partitions.
+    • Per-thread stack size: k3B and k4B allocate ~1.5 KB and ~3 KB of
+      thread-local Chebyshev arrays, exceeding the CUDA default 1 KB per-
+      thread stack.  cudaDeviceSetLimit(cudaLimitStackSize, 8192) is called
+      in chimesFF_gpu_upload_params_flat() to raise the limit to 8 KB.
+    • Batch pre-allocation (pair_chimes.cpp): the LAMMPS caller pre-sizes
+      all host batch arrays (h_dx_2b, h_typ_3b, etc.) to their full count
+      before the fill loop.  An earlier grow-on-demand design deleted and
+      re-created these arrays without copying existing entries, silently
+      zeroing atom-type indices already written and causing OOB accesses in
+      k3B/k4B (manifested as cudaErrorIllegalAddress).
 */
 
 #include "chimesFF_gpu.cuh"

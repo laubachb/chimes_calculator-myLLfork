@@ -17,30 +17,42 @@ Files
 in.lammps              LAMMPS input (identical physics to test_suite-NVE,
                         references the same data/parameter files)
 run_gpu_test.sh        Interactive runner (use inside an idev GPU session)
-submit_stampede3.slurm SLURM batch script for the gpu-h100 partition
+submit_stampede3.slurm SLURM batch script for Stampede3 GPU partitions
 compare_gpu.py         Comparison script with configurable tolerance
 
 
 Prerequisites
 -------------
-1. The GPU-enabled LAMMPS binary must be built first:
+1. The GPU-enabled LAMMPS binary must be built first.
 
+   First identify your GPU's SM architecture:
+       nvidia-smi --query-gpu=name,compute_cap --format=csv,noheader
+
+   Then build (example for Blackwell SM 120 on Stampede3):
        cd <repo>/etc/lmp
-       module load intel/24.0 impi/21.11 cuda/12.4
-       ./install_gpu.sh          # builds exe/lmp_mpi_chimes_gpu
+       module load gcc/13.2.0 cuda/12.8
+       ./install_gpu.sh 120     # replace 120 with your SM arch
+       # Binary: etc/lmp/exe/lmp_mpi_chimes_gpu
 
-   See etc/lmp/install_gpu.sh for per-machine module/hosttype details.
+   Common SM arch values:
+       120  RTX PRO 6000 Blackwell / B200
+        90  H100
+        80  A100
+        86  A30 / A40 / RTX 3090
+        89  L40S / RTX 4090
+        70  V100
 
 2. A GPU compute node (login nodes do not have GPUs).
 
 
 Running on Stampede3 -- interactive session
 -------------------------------------------
-# Step 1: obtain an interactive GPU node (H100)
-idev -p gpu-h100 -N 1 -n 1 --gpus=1 -t 00:30:00 -A <YOUR_ALLOCATION>
+# Step 1: obtain an interactive GPU node
+idev -p rtx-small -N 1 -n 1 -t 00:30:00 -A <YOUR_ALLOCATION>
+# (or use -p h100 for H100 nodes)
 
-# Step 2: load modules (same as used for the build)
-module load intel/24.0 impi/21.11 cuda/12.4 python3/3.11
+# Step 2: load modules matching the build
+module load intel/24.0 impi/21.11 gcc/13.2.0 cuda/12.8 python/3.12.11
 
 # Step 3: run the test
 cd <repo>/etc/lmp/tests/test_suite-GPU_NVE
@@ -54,9 +66,10 @@ Expected output (current_output/):
 
 Running on Stampede3 -- batch submission
 ----------------------------------------
-# Edit submit_stampede3.slurm and replace <YOUR_ALLOCATION>
-# with your TACC project allocation code.
+# The allocation is already set in submit_stampede3.slurm (TG-CHM250118).
+# Edit the file if you need a different allocation or partition.
 
+cd <repo>/etc/lmp/tests/test_suite-GPU_NVE
 sbatch submit_stampede3.slurm
 
 Monitor with:  squeue -u $USER
@@ -65,8 +78,12 @@ Results in:    current_output/
 
 Manual one-liner (from an interactive GPU node)
 -----------------------------------------------
+cd <repo>/etc/lmp/tests/test_suite-GPU_NVE/current_output
+cp ../in.lammps .
+cp ../../test_suite-NVE/diamond_3.21gcc_512atoms.data.in .
+cp ../../../serial_interface/tests/force_fields/published_params.Carbon-2.0.Small.2+3+4b.Tersoff.txt params.txt
 srun -n 1 ../../exe/lmp_mpi_chimes_gpu -i in.lammps | tee out.lammps
-python3 compare_gpu.py ../test_suite-NVE/expected_output/log.lammps \
+python3 ../compare_gpu.py ../../test_suite-NVE/expected_output/log.lammps \
         log.lammps 1e-3
 
 
@@ -80,3 +97,17 @@ the order of a few ULP (units in the last place), which propagates to
 ~1e-4 differences in per-step thermo quantities after 100 steps.  A
 tolerance of 1e-3 provides comfortable margin while still catching genuine
 physics errors.
+
+
+Known issues / implementation notes
+------------------------------------
+* Per-thread stack: the k3B and k4B kernels require ~1.5 KB and ~3 KB of
+  thread-local storage for Chebyshev arrays, exceeding the CUDA default of
+  1 KB.  cudaDeviceSetLimit(cudaLimitStackSize, 8192) is called at
+  initialization; no user action required.
+
+* Batch pre-allocation: host batch arrays for 2B/3B/4B interactions are
+  pre-sized to the full count before filling.  An earlier version grew the
+  arrays on demand, dropping already-written entries on each reallocation and
+  sending garbage atom-type indices to the GPU — the root cause of the
+  initial cudaErrorIllegalAddress crash during development.

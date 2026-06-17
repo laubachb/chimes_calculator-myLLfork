@@ -31,3 +31,11 @@ etc/lammps/
 
 # Test run artefacts (GPU validation produces no persistent output by design)
 chimescalc-gpu-validate
+
+# Compiled LAMMPS binaries
+etc/lmp/exe/
+
+# SLURM job output files and test run artefacts from test_suite-GPU_NVE
+etc/lmp/tests/test_suite-GPU_NVE/*.err
+etc/lmp/tests/test_suite-GPU_NVE/*.out
+etc/lmp/tests/test_suite-GPU_NVE/current_output/

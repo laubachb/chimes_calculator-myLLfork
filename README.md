@@ -95,6 +95,7 @@ every timestep.
 
 | GPU | SM arch | `CUDA_ARCH` value |
 |-----|---------|-------------------|
+| RTX PRO 6000 Blackwell / B200 | sm_120 | `120` |
 | H100 | sm_90 | `90` (default) |
 | A100 | sm_80 | `80` |
 | A30 / A40 / RTX 3090 | sm_86 | `86` |
@@ -104,6 +105,8 @@ every timestep.
 
 `atomicAdd` for `double` requires SM ≥ 6.0 (Pascal, 2016+); older GPUs are not supported.
 A comma-separated list (e.g. `CUDA_ARCH=80,90`) produces a fat binary that runs on multiple generations.
+
+To identify the SM arch of a GPU on your system: `nvidia-smi --query-gpu=name,compute_cap --format=csv,noheader`
 
 ### Building the ChIMES library with GPU support
 
@@ -131,9 +134,19 @@ cmake --build build_gpu -j8
 
 ### Using GPU acceleration with LAMMPS
 
-Build LAMMPS against the GPU-enabled `libchimescalc.so` following the
-standard instructions in `etc/lmp/`. No changes to the LAMMPS input script
-are required. The GPU path activates automatically when:
+The recommended way to build GPU-enabled LAMMPS is with the provided script:
+
+```bash
+# On Stampede3 (or any system with GCC + CUDA):
+module load gcc/13.2.0 cuda/12.8   # adjust versions for your system
+
+cd etc/lmp
+./install_gpu.sh 120   # 120 = Blackwell; use 90 for H100, 80 for A100, etc.
+# Binary: etc/lmp/exe/lmp_mpi_chimes_gpu
+```
+
+No changes to the LAMMPS input script are required. The GPU path activates
+automatically when:
 
 - The build was compiled with `USE_CUDA`, and
 - No per-atom energy/virial output is requested (i.e. `eflag_atom = vflag_atom = 0`).
@@ -180,13 +193,28 @@ Loaded: 1 atom types, 2B order 12, 3B enabled
 > by ≈ 10⁻¹² – 10⁻¹⁰ eV (machine-epsilon level).  This is the standard
 > trade-off for GPU parallelism and does not affect physical observables.
 
+### LAMMPS GPU NVE test
+
+A full LAMMPS integration test is provided in `etc/lmp/tests/test_suite-GPU_NVE/`.
+It runs 100 NVE steps on 512 carbon atoms using the Carbon-2.0 (2+3+4B Tersoff)
+force field and compares GPU thermo output against the CPU reference within 1×10⁻³.
+
+```bash
+# Stampede3 batch submission (rtx-small or h100 partition):
+cd etc/lmp/tests/test_suite-GPU_NVE
+sbatch submit_stampede3.slurm
+```
+
 ### New files
 
 | File | Purpose |
 |------|---------|
 | `chimesFF/src/chimesFF_gpu.cuh` | C++ interface to GPU kernels (no CUDA headers required by callers) |
 | `chimesFF/src/chimesFF_gpu.cu`  | CUDA kernels: `k2B`, `k3B`, `k4B`; parameter upload/teardown |
-| `chimesFF/tests/gpu_validate/test_gpu_cpu.cu` | GPU vs CPU validation test |
+| `chimesFF/tests/gpu_validate/test_gpu_cpu.cu` | Standalone GPU vs CPU validation test |
+| `etc/lmp/install_gpu.sh` | One-shot build script for GPU-enabled LAMMPS |
+| `etc/lmp/etc/Makefile.mpi_chimes_gpu` | LAMMPS Makefile template with CUDA link rules |
+| `etc/lmp/tests/test_suite-GPU_NVE/` | LAMMPS GPU NVE test (512 C atoms, SLURM script, comparison tool) |
 
 ### Modified files
 
@@ -195,9 +223,19 @@ Loaded: 1 atom types, 2B order 12, 3B enabled
 | `config.cmake` | `WITH_CUDA` option and `CUDA_ARCH` cache variable |
 | `CMakeLists.txt` | CUDA language, sources, definitions, test target |
 | `chimesFF/src/chimesFF.h` | `upload_params_to_device()` / `free_device_params()` |
-| `chimesFF/src/chimesFF.cpp` | Implementation of the above |
+| `chimesFF/src/chimesFF.cpp` | Implementation of the above; `build_pair_int_trip/quad_map()` called before upload |
 | `etc/lmp/src/pair_chimes.h` | GPU batch-array members and helper declarations |
-| `etc/lmp/src/pair_chimes.cpp` | `compute_gpu()`, buffer management, `compute()` dispatch |
+| `etc/lmp/src/pair_chimes.cpp` | `compute_gpu()`, pre-allocated batch buffers, `compute()` dispatch |
+
+### Implementation notes
+
+- **Per-thread stack size**: k3B and k4B allocate ~1.5 KB and ~3 KB of thread-local
+  storage for Chebyshev arrays, exceeding the CUDA default 1 KB stack.
+  `cudaDeviceSetLimit(cudaLimitStackSize, 8192)` is called at initialization.
+- **Batch pre-allocation**: Batch host arrays for 2B/3B/4B interactions are
+  pre-allocated to the full required size before filling. Earlier grow-on-demand
+  code deleted and re-allocated without copying existing data, corrupting atom-type
+  entries and producing out-of-bounds GPU memory accesses.
 
 <hr>
 
