@@ -18,12 +18,12 @@
 #SBATCH -J chimes_gpu_nve
 #SBATCH -o slurm-%j.out
 #SBATCH -e slurm-%j.err
-#SBATCH -p gpu-h100
+#SBATCH -p h100
 #SBATCH -N 1
 #SBATCH --ntasks=1
 #SBATCH --gpus=1
 #SBATCH -t 00:30:00
-#SBATCH -A <YOUR_ALLOCATION>        # <-- replace with your project allocation
+#SBATCH -A tg-chm250118
 
 # ------------------------------------------------------------------ #
 # Environment                                                          #
