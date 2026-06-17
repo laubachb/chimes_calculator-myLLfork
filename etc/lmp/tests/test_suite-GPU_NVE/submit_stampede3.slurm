@@ -18,22 +18,21 @@
 #SBATCH -J chimes_gpu_nve
 #SBATCH -o slurm-%j.out
 #SBATCH -e slurm-%j.err
-#SBATCH -p h100
+#SBATCH -p rtx-small
 #SBATCH -N 1
 #SBATCH --ntasks=1
-#SBATCH --gpus=1
 #SBATCH -t 00:30:00
-#SBATCH -A tg-chm250118
+#SBATCH -A TG-CHM250118
 
 # ------------------------------------------------------------------ #
 # Environment                                                          #
 # ------------------------------------------------------------------ #
 
 module purge
-module load intel/24.0
+module load gcc/13.2.0
 module load impi/21.11
-module load cuda/12.4
-module load python3/3.11
+module load cuda/12.8
+module load python3/3.12.11
 
 # Confirm GPU is visible
 echo "=== GPU info ==="
