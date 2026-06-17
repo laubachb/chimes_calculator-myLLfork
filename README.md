@@ -196,14 +196,20 @@ Loaded: 1 atom types, 2B order 12, 3B enabled
 ### LAMMPS GPU NVE test
 
 A full LAMMPS integration test is provided in `etc/lmp/tests/test_suite-GPU_NVE/`.
-It runs 100 NVE steps on 512 carbon atoms using the Carbon-2.0 (2+3+4B Tersoff)
-force field and compares GPU thermo output against the CPU reference within 1×10⁻³.
+It runs 100 NVE steps on 512 carbon atoms and compares GPU thermo output against the CPU reference within 1×10⁻³.
 
 ```bash
-# Stampede3 batch submission (rtx-small or h100 partition):
 cd etc/lmp/tests/test_suite-GPU_NVE
 sbatch submit_stampede3.slurm
 ```
+
+### CPU vs GPU benchmark
+
+`etc/lmp/tests/test_suite-GPU_vs_CPU_benchmark/` runs the same 512-atom system on
+both CPU and GPU, then reports per-atom force consistency, thermo consistency, and
+wall-time speedup.  On Stampede3 Blackwell (`rtx-small`, SM 120) this test
+achieved **9.15× speedup** with forces matching to ~1×10⁻¹⁰.  See that
+directory's README for Stampede3 build instructions.
 
 ### New files
 
@@ -215,6 +221,7 @@ sbatch submit_stampede3.slurm
 | `etc/lmp/install_gpu.sh` | One-shot build script for GPU-enabled LAMMPS |
 | `etc/lmp/etc/Makefile.mpi_chimes_gpu` | LAMMPS Makefile template with CUDA link rules |
 | `etc/lmp/tests/test_suite-GPU_NVE/` | LAMMPS GPU NVE test (512 C atoms, SLURM script, comparison tool) |
+| `etc/lmp/tests/test_suite-GPU_vs_CPU_benchmark/` | CPU vs GPU force/thermo consistency and speedup benchmark |
 
 ### Modified files
 

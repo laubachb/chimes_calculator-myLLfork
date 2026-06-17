@@ -1,0 +1,178 @@
+ChIMES CPU vs GPU Benchmark
+============================
+
+Overview
+--------
+NVE run of 512 carbon atoms (Carbon-2.0, 2+3+4B Tersoff) used to:
+
+  1. Verify force consistency between CPU and GPU paths
+     (per-atom fx/fy/fz at step 0, compared within 1e-3 kcal/mol/Å)
+
+  2. Measure GPU speedup relative to a single-rank CPU run
+     (LAMMPS "Loop time" ratio for the 200-step NVE phase)
+
+The input runs in two phases:
+  Phase 1 -- run 0 steps, dump per-atom forces at initial configuration
+  Phase 2 -- run 200 NVE steps (timed)
+
+
+Files
+-----
+in.lammps              LAMMPS input (same physics as test_suite-NVE)
+benchmark.py           Analysis script: forces + thermo + speedup report
+run_benchmark.sh       Interactive runner (GPU compute node required)
+submit_stampede3.slurm SLURM batch script for Stampede3 GPU partitions
+
+
+Building executables on Stampede3
+----------------------------------
+This test requires **both** binaries in `etc/lmp/exe/`:
+
+  exe/lmp_mpi_chimes       (CPU)
+  exe/lmp_mpi_chimes_gpu   (GPU)
+
+They use different filenames and can coexist.
+
+
+Step 1: Build the CPU binary (login node)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+    cd <repo>/etc/lmp
+    module purge
+    module load intel/24.0 impi/21.11
+    ./install.sh
+
+Produces: `exe/lmp_mpi_chimes`
+
+
+Step 2: Build the GPU binary (login node)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+First identify your GPU's SM architecture (run on a GPU node, or check
+partition docs):
+
+    nvidia-smi --query-gpu=name,compute_cap --format=csv,noheader
+
+On Stampede3 `rtx-small` (Blackwell, compute_cap 12.0), use `CUDA_ARCH=120`.
+On `h100` partitions, use `CUDA_ARCH=90`.
+
+**Important — module conflict on Stampede3:**
+`impi` requires the Intel toolchain; the `cuda` module requires GCC.
+Loading `module load intel impi gcc cuda` in one line deactivates `impi`
+and breaks the build (`mpicxx: No such file or directory`).
+
+Use `hosttype=UT-TACC` so `install_gpu.sh` loads intel+impi and adds
+gcc/cuda to PATH without loading those modules:
+
+    cd <repo>/etc/lmp
+    export hosttype=UT-TACC
+    ./install_gpu.sh 120        # 120 = Blackwell; use 90 for H100, 80 for A100
+
+Manual equivalent:
+
+    module purge
+    module load intel/24.0 impi/21.11
+    export PATH=/opt/apps/gcc/13.2.0/bin:/home1/apps/nvidia/Linux_x86_64/25.3/cuda/12.8/bin:$PATH
+    export CUDA_PATH=/home1/apps/nvidia/Linux_x86_64/25.3/cuda/12.8
+    ./install_gpu.sh 120
+
+Produces: `exe/lmp_mpi_chimes_gpu`
+
+Verify both binaries exist:
+
+    ls -la exe/lmp_mpi_chimes exe/lmp_mpi_chimes_gpu
+
+
+Running on Stampede3 -- batch submission (recommended)
+------------------------------------------------------
+Edit `#SBATCH -A` in `submit_stampede3.slurm` if needed, then:
+
+    cd <repo>/etc/lmp/tests/test_suite-GPU_vs_CPU_benchmark
+    sbatch submit_stampede3.slurm
+
+Monitor with:  squeue -u $USER
+Results in:    current_output_cpu/   (CPU run)
+               current_output_gpu/   (GPU run)
+               benchmark_results.txt (summary)
+
+
+Running on Stampede3 -- interactive session
+--------------------------------------------
+    idev -p rtx-small -N 1 -n 1 -t 00:30:00 -A <YOUR_ALLOCATION>
+
+    # Runtime modules (sequential load works on GPU nodes):
+    module purge
+    module load intel/24.0
+    module load impi/21.11
+    module load gcc/13.2.0
+    module load cuda/12.8
+    module load python/3.12.11
+
+    cd <repo>/etc/lmp/tests/test_suite-GPU_vs_CPU_benchmark
+    ./run_benchmark.sh
+
+
+Reference results (Stampede3, rtx-small, Blackwell SM 120)
+-----------------------------------------------------------
+Validated 2026-06-17 on NVIDIA RTX PRO 6000 Blackwell Server Edition
+(compute capability 12.0), 512 C atoms, 200 NVE steps, tolerance 1e-3.
+
+Force consistency (step 0, 512 atoms):
+  fx: max|Δ| = 0.0       mean|Δ| = 0.0
+  fy: max|Δ| = 1.0e-10   mean|Δ| = 1.95e-13
+  fz: max|Δ| = 1.0e-10   mean|Δ| = 1.95e-13
+  Force check: PASS
+
+Thermo consistency (12 output steps): PASS
+
+Wall-time speedup (200-step NVE loop):
+  CPU loop time : 149.1 s
+  GPU loop time :  16.3 s
+  Speedup       :  9.15x
+
+  OVERALL: PASS
+
+
+Expected output format (benchmark_results.txt)
+-----------------------------------------------
+======================================================================
+  ChIMES CPU vs GPU Benchmark
+======================================================================
+...
+[1] Per-atom force consistency at step 0
+----------------------------------------------------------------------
+  Atoms compared : 512
+  fx: max|Δ| = ...   mean|Δ| = ...   (tol=1.00e-03)
+  ...
+  Force check: PASS
+
+[2] Thermo consistency across all steps
+----------------------------------------------------------------------
+  Thermo check: PASS
+
+[3] Wall-time speedup
+----------------------------------------------------------------------
+  CPU loop time :  XXX.XXXX s
+  GPU loop time :  XX.XXXX s
+  Speedup (CPU/GPU): X.XXx
+
+======================================================================
+  OVERALL: PASS -- CPU and GPU results are consistent within tolerance
+======================================================================
+
+
+Tolerance rationale
+--------------------
+GPU atomicAdd reductions are non-associative; per-atom forces can differ
+from CPU by a few ULP in double precision.  The 1e-3 tolerance provides
+a safe margin while still catching genuine physics errors.  In practice,
+forces at step 0 often match to ~1e-10 or better when the same geometry
+is evaluated on both paths.
+
+
+Speedup notes
+--------------
+For this 512-atom test on Stampede3 Blackwell GPUs, ~9x speedup was
+observed for the force-evaluation loop.  Speedup depends on GPU model,
+SM architecture match at build time, and system size; larger simulations
+typically benefit more from GPU acceleration.

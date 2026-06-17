@@ -3,9 +3,19 @@
 # install_gpu.sh -- Build LAMMPS with ChIMES + CUDA GPU acceleration
 #
 # Prerequisites (load before running, or set hosttype):
-#   Stampede3 H100 nodes:
-#     module load intel/24.0 impi/21.11 cuda/12.4
+#   Stampede3 (login or GPU node):
 #     export hosttype=UT-TACC
+#     ./install_gpu.sh 120
+#
+#     impi requires intel; the cuda module requires gcc — loading both
+#     module families at once deactivates impi.  With hosttype=UT-TACC the
+#     script loads intel+impi and adds gcc/cuda bins to PATH instead.
+#
+#   Manual workaround (if not using hosttype):
+#     module purge
+#     module load intel/24.0 impi/21.11
+#     export PATH=/opt/apps/gcc/13.2.0/bin:/home1/apps/nvidia/Linux_x86_64/25.3/cuda/12.8/bin:$PATH
+#     export CUDA_PATH=/home1/apps/nvidia/Linux_x86_64/25.3/cuda/12.8
 #
 #   Alternatively set hosttype for any of the supported machines that
 #   have a corresponding modfiles/*.mod entry.  For other machines, load
@@ -57,8 +67,6 @@ if [ -z "$CUDA_PATH" ] || [ ! -f "${CUDA_PATH}/include/cuda_runtime.h" ]; then
 fi
 
 echo "Using CUDA toolkit: ${CUDA_PATH}"
-echo "nvcc version:"
-nvcc --version 2>&1 | head -3
 
 # ------------------------------------------------------------------ #
 # Load host-specific modules                                           #
@@ -71,7 +79,12 @@ if [ -z "$hosttype" ]; then
     echo "WARNING: No hosttype specified – assuming modules are already loaded."
     echo ""
 elif [[ "$hosttype" == "UT-TACC" ]]; then
+    module purge 2>/dev/null || true
     source "${SCRIPT_DIR}/modfiles/UT-TACC.mod"
+    # impi needs intel; cuda module needs gcc — cannot load both module families.
+    # Provide gcc (nvcc host compiler) and cuda via PATH instead.
+    export PATH="/opt/apps/gcc/13.2.0/bin:/home1/apps/nvidia/Linux_x86_64/25.3/cuda/12.8/bin:${PATH}"
+    export CUDA_PATH="${CUDA_PATH:-/home1/apps/nvidia/Linux_x86_64/25.3/cuda/12.8}"
 elif [[ "$hosttype" == "LLNL-LC" ]]; then
     source "${SCRIPT_DIR}/modfiles/LLNL-LC.mod"
 elif [[ "$hosttype" == "UM-ARC" ]]; then
@@ -84,6 +97,26 @@ else
     for m in "${SCRIPT_DIR}/modfiles/"*.mod; do echo "   ${m%.mod##*/}"; done
     exit 1
 fi
+
+if ! command -v mpicxx &>/dev/null; then
+    echo "ERROR: mpicxx not found."
+    echo "Load MPI before building, e.g.:"
+    echo "  module purge && module load intel/24.0 impi/21.11"
+    echo "Or on Stampede3:"
+    echo "  export hosttype=UT-TACC && ./install_gpu.sh ${CUDA_ARCH}"
+    exit 1
+fi
+
+if ! command -v nvcc &>/dev/null; then
+    echo "ERROR: nvcc not found."
+    echo "On Stampede3, use hosttype=UT-TACC or add cuda to PATH:"
+    echo "  export PATH=/home1/apps/nvidia/Linux_x86_64/25.3/cuda/12.8/bin:\$PATH"
+    exit 1
+fi
+
+echo "mpicxx: $(which mpicxx)"
+echo "nvcc version:"
+nvcc --version 2>&1 | head -3
 
 # ------------------------------------------------------------------ #
 # Step 1: Pre-compile chimesFF_gpu.cu → static archive                #

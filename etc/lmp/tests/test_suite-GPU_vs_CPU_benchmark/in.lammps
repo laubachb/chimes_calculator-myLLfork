@@ -1,0 +1,68 @@
+##########################################
+# ChIMES CPU vs GPU benchmark
+#
+# Runs two phases:
+#   Phase 1 (run 0): dumps per-atom forces at step 0 for consistency check
+#   Phase 2 (run N): timed MD loop used to measure GPU speedup
+#
+# Run with the CPU binary:
+#   srun -n 1 ../../exe/lmp_mpi_chimes   -i in.lammps -log log.lammps
+#
+# Run with the GPU binary:
+#   srun -n 1 ../../exe/lmp_mpi_chimes_gpu -i in.lammps -log log.lammps
+##########################################
+
+variable run_steps    equal 200
+variable tstep        equal 0.5
+variable temperature  equal 3000
+variable io_freq      equal 20
+
+variable data_file    string diamond_3.21gcc_512atoms.data.in
+variable param_file   string params.txt
+
+########################################
+# GENERAL CONTROLS
+########################################
+
+units           real
+newton          on
+atom_style      atomic
+atom_modify     sort 0 0.0
+atom_modify     map array
+
+neighbor        1.5 bin
+neigh_modify    delay 0 every 1 check yes
+
+########################################
+# INITIALIZATION
+########################################
+
+read_data       ${data_file}
+velocity        all create ${temperature} 1234 dist gaussian mom yes rot yes loop all
+
+########################################
+# FORCE FIELD
+########################################
+
+pair_style      chimesFF
+pair_coeff      * * ${param_file}
+
+########################################
+# PHASE 1: dump per-atom forces at step 0 (no integration)
+########################################
+
+dump        forces all custom 1 forces.dump id type x y z fx fy fz
+dump_modify forces sort id format float %20.10f
+run         0
+undump      forces
+
+########################################
+# PHASE 2: timed NVE run
+########################################
+
+fix         1 all nve
+thermo_style custom step time temp press density ke pe etotal econserve
+thermo_modify line one format float %20.5f flush yes
+thermo      ${io_freq}
+timestep    ${tstep}
+run         ${run_steps}

@@ -20,18 +20,22 @@ srun -n 36 ../exe/lmp_mpi_chimes -i in.lammps | tee out.lammps
 * To run the tabulation test, you need to install using "./install.sh TABULATION". To run the fingerprint test, you need to install using "./install.sh FINGERPRINT" and run the example via something like ./run_jobs.sh 36". See the scripts in question and documentation for additional details.
 
 
-GPU TEST:
+GPU TESTS:
 
-test_suite-GPU_NVE/ contains a GPU-accelerated NVE test for the CUDA build.
-It requires the GPU-enabled LAMMPS binary (exe/lmp_mpi_chimes_gpu) built via:
+Two GPU test directories are provided; both require exe/lmp_mpi_chimes_gpu
+(built via etc/lmp/install_gpu.sh) and a GPU compute node.
 
-    cd <repo>/etc/lmp
-    module load gcc/13.2.0 cuda/12.8   # or equivalent on your system
-    ./install_gpu.sh <SM_ARCH>          # e.g. 120 for Blackwell, 90 for H100
+test_suite-GPU_NVE/
+    Validates that the GPU path reproduces the CPU reference thermo output
+    within 1e-3.  Quick smoke-test for correctness.
+    On Stampede3:  cd test_suite-GPU_NVE && sbatch submit_stampede3.slurm
 
-The test must be run on a GPU compute node. On Stampede3:
+test_suite-GPU_vs_CPU_benchmark/
+    Runs the same simulation on CPU and GPU, then reports:
+      1. Per-atom force consistency (max |Δf| per component at step 0)
+      2. Thermo consistency across all output steps
+      3. GPU speedup relative to single-rank CPU (Loop time ratio)
+    Requires both exe/lmp_mpi_chimes and exe/lmp_mpi_chimes_gpu.
+    On Stampede3:  cd test_suite-GPU_vs_CPU_benchmark && sbatch submit_stampede3.slurm
 
-    cd test_suite-GPU_NVE
-    sbatch submit_stampede3.slurm
-
-See test_suite-GPU_NVE/README for full details.
+See each directory's README for build instructions and full details.

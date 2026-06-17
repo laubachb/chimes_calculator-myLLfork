@@ -35,8 +35,13 @@ chimescalc-gpu-validate
 # Compiled LAMMPS binaries
 etc/lmp/exe/
 
-# SLURM job output files and test run artefacts from test_suite-GPU_NVE
+# SLURM job output files and test run artefacts (GPU tests)
 etc/lmp/tests/test_suite-GPU_NVE/*.err
 etc/lmp/tests/test_suite-GPU_NVE/*.out
 etc/lmp/tests/test_suite-GPU_NVE/current_output/
+etc/lmp/tests/test_suite-GPU_vs_CPU_benchmark/*.err
+etc/lmp/tests/test_suite-GPU_vs_CPU_benchmark/*.out
+etc/lmp/tests/test_suite-GPU_vs_CPU_benchmark/current_output_cpu/
+etc/lmp/tests/test_suite-GPU_vs_CPU_benchmark/current_output_gpu/
+etc/lmp/tests/test_suite-GPU_vs_CPU_benchmark/benchmark_results.txt
 writing/
