@@ -20,10 +20,12 @@ SHFLAGS    = -fPIC
 DEPFLAGS   = -M
 
 LINK       = mpicxx
-LINKFLAGS  = -O3 -std=c++11 \
-             -L$(CUDA_PATH)/lib64 -lcudart -lcudadevrt \
-             $(CHIMES_GPU_LIB)
-LIB        =
+LINKFLAGS  = -O3 -std=c++11
+# GPU archive and CUDA runtime must come AFTER -llammps_mpi_chimes_gpu on the
+# link line so the linker can resolve GPU symbols in the correct order.
+# LAMMPS expands the link rule as: $(LINK) $(LINKFLAGS) main.o $(LMPLINK) $(EXTRA_LIB) $(LIB)
+# Placing libs here in LIB keeps them after $(LMPLINK).
+LIB        = $(CHIMES_GPU_LIB) -L$(CUDA_PATH)/lib64 -lcudadevrt -lcudart
 SIZE       = size
 
 ARCHIVE    = ar
