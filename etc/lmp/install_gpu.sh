@@ -158,6 +158,10 @@ cp "${SCRIPT_DIR}/src/pair_chimes.cpp"          "${MANYBODY}/"
 cp "${SCRIPT_DIR}/etc/pair.h"                   "${SCRIPT_DIR}/build/${lammps}/src/"
 cp "${SCRIPT_DIR}/etc/pair.cpp"                 "${SCRIPT_DIR}/build/${lammps}/src/"
 
+# LAMMPS only symlinks .cpp/.h files from MANYBODY into src/ — copy .cuh directly
+# so that chimesFF.cpp can find it with a plain #include "chimesFF_gpu.cuh"
+cp "${REPO_ROOT}/chimesFF/src/chimesFF_gpu.cuh" "${SCRIPT_DIR}/build/${lammps}/src/"
+
 # Install the GPU-aware Makefile
 sed \
     -e "s|\$(CUDA_PATH)|${CUDA_PATH}|g" \

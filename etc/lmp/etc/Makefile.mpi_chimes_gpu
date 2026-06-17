@@ -13,13 +13,13 @@ SHELL = /bin/sh
 # ---------------------------------------------------------------------
 # compiler/linker settings
 
-CC         = mpiicpc
-CCFLAGS    = -O3 -std=c++11 -restrict -DUSE_CUDA -DMAX_POLY_ORDER=24 \
+CC         = mpicxx
+CCFLAGS    = -O3 -std=c++11 -DUSE_CUDA -DMAX_POLY_ORDER=24 \
              -I$(CUDA_PATH)/include
 SHFLAGS    = -fPIC
 DEPFLAGS   = -M
 
-LINK       = mpiicpc
+LINK       = mpicxx
 LINKFLAGS  = -O3 -std=c++11 \
              -L$(CUDA_PATH)/lib64 -lcudart -lcudadevrt \
              $(CHIMES_GPU_LIB)
@@ -35,9 +35,9 @@ SHLIBFLAGS = -shared
 
 LMP_INC = -DLAMMPS_GZIP -DLAMMPS_MEMALIGN=64
 
-# MPI library (Intel MPI)
-MPI_INC     = -DMPICH_SKIP_MPICXX -DOMPI_SKIP_MPICXX=1 -I${I_MPI_ROOT}/include
-MPI_PATH    = -L${I_MPI_ROOT}/lib -L${I_MPI_ROOT}/lib/release
+# MPI library (Intel MPI with GCC backend, or OpenMPI)
+MPI_INC     = -DMPICH_SKIP_MPICXX -DOMPI_SKIP_MPICXX=1
+MPI_PATH    =
 MPI_LIB     =
 
 FFT_INC     =
