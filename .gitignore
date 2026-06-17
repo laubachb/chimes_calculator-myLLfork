@@ -39,3 +39,4 @@ etc/lmp/exe/
 etc/lmp/tests/test_suite-GPU_NVE/*.err
 etc/lmp/tests/test_suite-GPU_NVE/*.out
 etc/lmp/tests/test_suite-GPU_NVE/current_output/
+writing/
