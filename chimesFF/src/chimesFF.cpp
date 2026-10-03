@@ -2952,7 +2952,11 @@ void chimesFF::set_atomtypes(vector<string> & type_list)
 
 int chimesFF::get_atom_pair_index(int pair_id)
 {
-    return atom_idx_pair_map[pair_id];
+    // pair_id = (type index of atom 1) * natmtyps + (type index of atom 2).
+    // atom_idx_pair_map is indexed by PAIRMAPS row, and those rows are ordered by chemical symbol,
+    // which only coincides with type order when the types happen to be listed alphabetically.
+    // atom_int_pair_map is the type-indexed map the 3- and 4-body kernels use.
+    return atom_int_pair_map[pair_id];
 }
 
 void chimesFF::build_pair_int_quad_map()
