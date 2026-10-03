@@ -122,8 +122,11 @@ enum class fcutType
     TERSOFF,
 } ;
     
+class chimesMBFast;   // fast many-body evaluator, chimesFF_mbfast.h
+
 class chimesFF
 {
+    friend class chimesMBFast;
 public:
     
     ////////////////////////
