@@ -17,6 +17,13 @@ Documentation
 
 <hr>
 
+Fast many-body evaluation
+------------------------
+
+`pair_style chimesFF fastmb` in LAMMPS evaluates 3- and 4-body interactions exactly (to floating-point roundoff) and much faster than the default loops: 14-186x per MD step for published carbon and nitrogen models on one node. See [FASTMB.md](FASTMB.md) and the LAMMPS page of the documentation.
+
+<hr>
+
 Community
 ------------------------
 

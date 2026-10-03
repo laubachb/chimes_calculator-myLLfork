@@ -98,6 +98,42 @@ The data file must have atom types with matching masses (order doesn't matter):
 
 **Important:** If no mass matches are found between the ChIMES parameter file and LAMMPS data file, the simulation will terminate with an error, as ChIMES cannot be used for any interactions.
 
+Fast Many-Body Evaluation (fastmb)
+""""""""""""""""""""""""""""""""""
+
+Adding the keyword ``fastmb`` to the pair style evaluates the 3- and 4-body ChIMES terms with the same
+arithmetic as the default code, reordered. Energies, forces and the virial agree with the default
+evaluation to floating-point roundoff (relative differences of 1e-13 or less, the same size as the
+differences the default code shows between MPI rank counts), and parameter files are unchanged.
+
+.. code-block:: text
+
+    neighbor        0.3 bin
+    neigh_modify    delay 0 every 1 check yes
+    pair_style      chimesFF fastmb
+    pair_coeff      * * some_standard_chimes_parameter_file.txt
+
+``fastmb`` combines:
+
+* a per-pair cache of the cutoff-weighted Chebyshev polynomials and their derivatives, computed once per pair per step instead of once per cluster;
+* sum factorization: each coefficient tensor is stored as a compressed sparse fiber tree, and one sweep returns the cluster energy and every pair derivative;
+* SIMD batches: eight clusters of the same type pass through the tree together (double precision);
+* cluster lists built as the triangles and tetrahedra of the Vietoris-Rips complex, with adjacency bitsets instead of nested distance loops (the default loops are used automatically when the box is smaller than twice the padded many-body cutoff);
+* cluster ownership by a hash of the atom tag rather than the tag itself, which balances work across MPI ranks.
+
+Optional keywords, for A/B testing: ``nosimd`` (one cluster at a time), ``norips`` (default cluster-list loops)
+and ``orient tag`` (default ownership rule). Setting the environment variable ``CHIMES_TIMING=1`` prints per-phase
+timings at exit. ``fastmb`` is ignored, with a message, for tabulated 3-body parameters and in FINGERPRINT builds.
+
+For full speed compile with OpenMP SIMD and the target vector instruction set (the UT-TACC makefile uses
+``-qopenmp-simd -xCORE-AVX512``). A neighbor skin of about 0.3 Angstrom is recommended: cluster lists are rebuilt
+cheaply, and a smaller skin keeps fewer inactive clusters in them.
+
+On one Stampede3 SPR node (112 MPI ranks), ``fastmb`` with a 0.3 Angstrom skin reduced the time per MD step
+relative to the default code by 186x for Carbon-2.0 Large (12,800 atoms), 87x for the reshock nitrogen model
+(13,824 atoms) and 14x for Carbon-2.0 Small (102,400 atoms). To check a build, run
+``etc/lmp/tests/example-fastmb/check_fastmb.sh``.
+
 Hybrid Overlay Usage
 """""""""""""""""""
 
