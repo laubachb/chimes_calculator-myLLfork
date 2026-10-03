@@ -28,6 +28,7 @@ PairStyle(chimesFF,PairCHIMES); // PairStyle(key, class)
 #include "pair.h"
 
 #include "chimesFF.h"
+#include "chimesFF_mbfast.h"
 #include <vector>	
 
 
@@ -74,6 +75,28 @@ namespace LAMMPS_NS
             // Prepare files necessary for ChIMES fitting 
             
             bool     for_fitting;
+
+			// Sum-factorized many-body path (pair_style chimesFF ... fastmb)
+			bool                use_fastmb;
+			chimesMBFast        mbfast;
+			std::vector<int>    mb_pair_a, mb_pair_b;   // registered pairs, local indices a < b
+			std::vector<int>    mb_tri_pid;             // 3 per triplet: 2*pair id + flip
+			std::vector<int>    mb_quad_pid;            // 6 per quadruplet
+			std::vector<double> mb_pair_r, mb_pair_dr;
+			void   build_mb_pair_registry();
+			bool   build_mb_neighlists_rips();      // false -> caller falls back to the stock loops (decided on all ranks)
+			bool   warned_self_image = false;
+
+			// fastmb options (pair_style keywords nosimd, norips, orient tag|hash)
+			bool   use_simd, use_rips, orient_hash;   // orient_hash: order atoms by a bijective hash of the tag
+			std::vector<std::vector<int> > mb_bucket;  // per cluster type key: pending cluster ids
+			std::vector<long long> mb_hkeys;           // flat open-addressing pair registry
+			std::vector<int>       mb_hvals;
+
+			// Optional phase timers (env CHIMES_TIMING=1): seconds, accumulated on each rank
+			bool   timing;
+			double t_mbnl, t_reg, t_cache, t_2b, t_3b, t_4b;
+			void   compute_mb_fast(int nbody);
             bool     fingerprint;
 			int IO_freq;
             ofstream badness_stream;			

@@ -7,7 +7,8 @@ SHELL = /bin/sh
 # specify flags and libraries needed for your compiler
 
 CC         = mpiicpc
-CCFLAGS =	-O3 -std=c++11
+# Stampede3 SKX, ICX and SPR nodes all support AVX-512; fastmb SIMD batches need it for full speed
+CCFLAGS =	-O3 -std=c++11 -qopenmp-simd -xCORE-AVX512 -qopt-zmm-usage=high
 SHFLAGS =	-fPIC
 DEPFLAGS =	-M
 

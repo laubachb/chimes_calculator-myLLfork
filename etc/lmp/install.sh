@@ -53,6 +53,7 @@ git clone --depth 1 --branch ${lammps} https://github.com/lammps/lammps.git buil
 # Copy ChIMES files to correct locations
 
 cp ../../chimesFF/src/chimesFF.{h,cpp}	build/${lammps}/src/MANYBODY/
+cp ../../chimesFF/src/chimesFF_mbfast.h	build/${lammps}/src/MANYBODY/
 cp src/pair_chimes.{h,cpp} 	          	build/${lammps}/src/MANYBODY/
 cp etc/pair.{h,cpp} 			              build/${lammps}/src
 
