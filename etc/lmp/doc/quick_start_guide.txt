@@ -6,7 +6,7 @@ LAMMPS + ChIMES Library Quick Start Guide
 
 # You'll need the following files, and the stable version (7 Aug 2019) version of LAMMPS (stable version as of 11/1/19):
 
-1. chimesFF.{h,cpp}     # ChIMES library files
+1. chimesFF.{h,cpp}, chimesFF_mbfast.h   # ChIMES library files (mbfast: pair_style chimesFF fastmb)
 2. pair_chimes.{h,cpp}  # ChIMES pair_style definition files
 3. pair.{h,cpp}         # Updated LAMMPS pair files (new ev_tally definition added)
 4. Makefile.mpi_chimes  # Makefile for compiling with ChIMES support

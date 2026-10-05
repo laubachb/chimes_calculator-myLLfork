@@ -18,3 +18,7 @@ Each example/test folder contains all the input you need to run the test in ques
 srun -n 36 ../exe/lmp_mpi_chimes -i in.lammps | tee out.lammps
 
 * To run the tabulation test, you need to install using "./install.sh TABULATION". To run the fingerprint test, you need to install using "./install.sh FINGERPRINT" and run the example via something like ./run_jobs.sh 36". See the scripts in question and documentation for additional details.
+
+FASTMB:
+
+example-fastmb checks that "pair_style chimesFF fastmb" (fast, exact many-body evaluation) reproduces the stock evaluation to roundoff for a single-element and a two-element model, with each fastmb option. Run it from inside example-fastmb with, e.g., ./check_fastmb.sh 4 "srun -n".

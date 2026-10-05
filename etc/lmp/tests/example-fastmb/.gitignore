@@ -1,0 +1,5 @@
+# outputs of check_fastmb.sh
+log.*
+out.*
+forces_*.dump
+log.lammps
