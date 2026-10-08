@@ -1,0 +1,429 @@
+LAMMPS (29 Aug 2024 - Update 1)
+Reading data file ...
+  orthogonal box = (0 0 0) to (11.998709 11.998709 17.771812)
+  3 by 3 by 4 MPI processor grid
+  reading atoms ...
+  144 atoms
+  read_data CPU = 0.024 seconds
+chimesFF: 
+chimesFF: 01000011011010001001001010011010100010101010011 0100010101101110110011101101001011011101100101  
+chimesFF: 
+chimesFF:       _____  _      _____  __  __  ______   _____   ______                _                      
+chimesFF:      / ____|| |    |_   _||  \/  ||  ____| / ____| |  ____|              (_)                    
+chimesFF:     | |     | |__    | |  | \  / || |__   | (___   | |__    _ __    __ _  _  _ __    ___        
+chimesFF:     | |     | '_ \   | |  | |\/| ||  __|   \___ \  |  __|  | '_ \  / _` || || '_ \  / _ \ 
+chimesFF:     | |____ | | | | _| |_ | |  | || |____  ____) | | |____ | | | || (_| || || | | ||  __/        
+chimesFF:      \_____||_| |_||_____||_|  |_||______||_____/  |______||_| |_| \__, ||_||_| |_| \___|     
+chimesFF:                                                                     __/ |                        
+chimesFF:                                                                    |___/                         
+chimesFF: 
+chimesFF:                      Copyright (C) 2020 R.K. Lindsey, L.E. Fried, N. Goldman                     
+chimesFF: 
+chimesFF: 01000011011010001001001010011010100010101010011 0100010101101110110011101101001011011101100101   
+chimesFF: 
+
+************************* WARNING (pair_style chimesFF) ************************
+Assuming n-body interactions have longer cutoffs than all (n+1)-body interactions
+************************* WARNING (pair_style chimesFF) ************************
+
+chimesFF: Reading parameters from file: params.txt
+chimesFF: Using respective 2, 3, and 4-body orders of: 2 2 2
+chimesFF: Note: Ignoring polynomial domain; assuming [-1,1]
+chimesFF: Will consider 2 atom types:
+chimesFF: 	0 Cu
+chimesFF: 	1 Zr
+chimesFF: Will consider 3 atom pair types
+chimesFF: Detected version 2 pair specification (no S_DELTA)
+chimesFF: 	0 Cu Cu
+chimesFF: 	1 Zr Zr
+chimesFF: 	2 Cu Zr
+chimesFF: Read the following pair type information:
+chimesFF: 	Cu Cu r_cut_in: 1.46000 r_cut_out: 7.00000 MORSE 2.55000
+chimesFF: 	Zr Zr r_cut_in: 1.76000 r_cut_out: 7.00000 MORSE 3.17000
+chimesFF: 	Cu Zr r_cut_in: 1.48000 r_cut_out: 7.00000 MORSE 2.79000
+chimesFF: Will use cutoff style TERSOFF
+ 0.75000
+chimesFF: Will use default penalty distance: 0.01000
+chimesFF: Will use default penalty scaling: 10000.00000
+chimesFF: Read 2B parameters for pair: 0 Cu Cu
+chimesFF: 	0 -1752.69801
+chimesFF: 	1 -1163.98691
+chimesFF: Read 2B parameters for pair: 1 Zr Zr
+chimesFF: 	0 1101.20365
+chimesFF: 	1 1294.19003
+chimesFF: Read 2B parameters for pair: 2 Cu Zr
+chimesFF: 	0 114.65965
+chimesFF: 	1 1901.26532
+chimesFF: Built the following 2-body pair "slow" map:
+chimesFF: 	1 ZrZr(i: 0)
+chimesFF: 	2 ZrCu(i: 1)
+chimesFF: 	2 CuZr(i: 2)
+chimesFF: 	0 CuCu(i: 3)
+chimesFF: Built the following 2-body pair "fast" map:
+chimesFF: 	CuCu: 0 0
+chimesFF: 	CuZr: 1 2
+chimesFF: 	ZrCu: 2 2
+chimesFF: 	ZrZr: 3 1
+chimesFF: Read 3B parameters for triplet: 0 Cu Cu Cu
+chimesFF: 	0 1 1 709034.15363
+chimesFF: 	1 0 1 709034.15363
+chimesFF: 	1 1 0 709034.15363
+chimesFF: 	1 1 1 3665236.65446
+chimesFF: Read 3B parameters for triplet: 1 Zr Cu Cu
+chimesFF: 	0 1 1 118184.26071
+chimesFF: 	1 0 1 118184.26071
+chimesFF: 	1 1 0 396963.76489
+chimesFF: 	1 1 1 641000.62235
+chimesFF: Read 3B parameters for triplet: 2 Zr Zr Cu
+chimesFF: 	0 1 1 1181839.38463
+chimesFF: 	1 0 1 36163.54024
+chimesFF: 	1 1 0 36163.54024
+chimesFF: 	1 1 1 1551593.08166
+chimesFF: Read 3B parameters for triplet: 3 Zr Zr Zr
+chimesFF: 	0 1 1 27302.19354
+chimesFF: 	1 0 1 27302.19354
+chimesFF: 	1 1 0 27302.19354
+chimesFF: 	1 1 1 8701.66544
+chimesFF: Built the following 3-body pair "slow" map:
+chimesFF: 	3 ZrZrZrZrZrZr
+chimesFF: 	2 ZrZrCuZrCuZr
+chimesFF: 	2 CuZrZrZrCuZr
+chimesFF: 	2 CuZrCuZrZrZr
+chimesFF: 	1 CuZrCuZrCuCu
+chimesFF: 	1 CuZrCuCuCuZr
+chimesFF: 	1 CuCuCuZrCuZr
+chimesFF: 	0 CuCuCuCuCuCu
+chimesFF: Built the following 3-body pair "fast" map:
+chimesFF: 	0 0
+chimesFF: 	1 1
+chimesFF: 	2 1
+chimesFF: 	3 2
+chimesFF: 	4 1
+chimesFF: 	5 2
+chimesFF: 	6 2
+chimesFF: 	7 3
+chimesFF: Set the following special 3-body outer cutoffs: 
+chimesFF: 	0 4.00000 4.00000 4.00000
+chimesFF: 	1 4.00000 4.00000 4.00000
+chimesFF: 	2 4.00000 4.00000 4.00000
+chimesFF: 	3 4.00000 4.00000 4.00000
+chimesFF: Read 4B parameters for quadruplets: 0 Cu Cu Cu Cu
+chimesFF: 	0 0 1 0 1 1 5175010017.34800
+chimesFF: 	0 1 0 1 0 1 5175010017.34800
+chimesFF: 	1 0 0 1 1 0 5175010017.34800
+chimesFF: 	1 1 1 0 0 0 5175010017.34800
+chimesFF: 	0 0 1 1 0 0 -20582749018.82000
+chimesFF: 	0 1 0 0 1 0 -20582749018.82000
+chimesFF: 	1 0 0 0 0 1 -20582749018.82000
+chimesFF: 	0 0 1 1 0 1 -22541763255.33000
+chimesFF: 	0 1 0 0 1 1 -22541763255.33000
+chimesFF: 	0 0 1 1 1 0 -22541763255.33000
+chimesFF: 	0 1 0 1 1 0 -22541763255.33000
+chimesFF: 	1 0 0 0 1 1 -22541763255.33000
+chimesFF: 	1 0 0 1 0 1 -22541763255.33000
+chimesFF: 	0 1 1 0 1 0 -22541763255.33000
+chimesFF: 	0 1 1 1 0 0 -22541763255.33000
+chimesFF: 	1 0 1 0 0 1 -22541763255.33000
+chimesFF: 	1 1 0 0 0 1 -22541763255.33000
+chimesFF: 	1 0 1 1 0 0 -22541763255.33000
+chimesFF: 	1 1 0 0 1 0 -22541763255.33000
+chimesFF: 	0 0 1 1 1 1 -14324953883.70000
+chimesFF: 	0 1 0 1 1 1 -14324953883.70000
+chimesFF: 	1 0 0 1 1 1 -14324953883.70000
+chimesFF: 	0 1 1 0 1 1 -14324953883.70000
+chimesFF: 	0 1 1 1 0 1 -14324953883.70000
+chimesFF: 	1 0 1 0 1 1 -14324953883.70000
+chimesFF: 	1 1 0 1 0 1 -14324953883.70000
+chimesFF: 	1 0 1 1 1 0 -14324953883.70000
+chimesFF: 	1 1 0 1 1 0 -14324953883.70000
+chimesFF: 	1 1 1 0 0 1 -14324953883.70000
+chimesFF: 	1 1 1 0 1 0 -14324953883.70000
+chimesFF: 	1 1 1 1 0 0 -14324953883.70000
+chimesFF: 	0 1 1 1 1 0 -37459853039.77000
+chimesFF: 	1 0 1 1 0 1 -37459853039.77000
+chimesFF: 	1 1 0 0 1 1 -37459853039.77000
+chimesFF: 	0 1 1 1 1 1 0.00000
+chimesFF: 	1 0 1 1 1 1 0.00000
+chimesFF: 	1 1 0 1 1 1 0.00000
+chimesFF: 	1 1 1 0 1 1 0.00000
+chimesFF: 	1 1 1 1 0 1 0.00000
+chimesFF: 	1 1 1 1 1 0 0.00000
+chimesFF: 	1 1 1 1 1 1 109159239903.50000
+chimesFF: Read 4B parameters for quadruplets: 1 Zr Cu Cu Cu
+chimesFF: 	0 0 1 0 1 1 185079983.84420
+chimesFF: 	0 1 0 1 0 1 185079983.84420
+chimesFF: 	1 0 0 1 1 0 185079983.84420
+chimesFF: 	0 0 1 1 0 0 160792280.24730
+chimesFF: 	0 1 0 0 1 0 160792280.24730
+chimesFF: 	1 0 0 0 0 1 160792280.24730
+chimesFF: 	0 0 1 1 0 1 535033047.53400
+chimesFF: 	0 1 0 0 1 1 535033047.53400
+chimesFF: 	0 0 1 1 1 0 535033047.53400
+chimesFF: 	0 1 0 1 1 0 535033047.53400
+chimesFF: 	1 0 0 0 1 1 535033047.53400
+chimesFF: 	1 0 0 1 0 1 535033047.53400
+chimesFF: 	0 0 1 1 1 1 1487946374.84700
+chimesFF: 	0 1 0 1 1 1 1487946374.84700
+chimesFF: 	1 0 0 1 1 1 1487946374.84700
+chimesFF: 	0 1 1 0 1 0 -1639285838.73900
+chimesFF: 	0 1 1 1 0 0 -1639285838.73900
+chimesFF: 	1 0 1 0 0 1 -1639285838.73900
+chimesFF: 	1 1 0 0 0 1 -1639285838.73900
+chimesFF: 	1 0 1 1 0 0 -1639285838.73900
+chimesFF: 	1 1 0 0 1 0 -1639285838.73900
+chimesFF: 	0 1 1 0 1 1 -770272853.37690
+chimesFF: 	0 1 1 1 0 1 -770272853.37690
+chimesFF: 	1 0 1 0 1 1 -770272853.37690
+chimesFF: 	1 1 0 1 0 1 -770272853.37690
+chimesFF: 	1 0 1 1 1 0 -770272853.37690
+chimesFF: 	1 1 0 1 1 0 -770272853.37690
+chimesFF: 	0 1 1 1 1 0 -3224202662.41000
+chimesFF: 	1 0 1 1 0 1 -3224202662.41000
+chimesFF: 	1 1 0 0 1 1 -3224202662.41000
+chimesFF: 	0 1 1 1 1 1 0.00000
+chimesFF: 	1 0 1 1 1 1 0.00000
+chimesFF: 	1 1 0 1 1 1 0.00000
+chimesFF: 	1 1 1 0 0 0 0.00000
+chimesFF: 	1 1 1 0 0 1 -5657493856.36500
+chimesFF: 	1 1 1 0 1 0 -5657493856.36500
+chimesFF: 	1 1 1 1 0 0 -5657493856.36500
+chimesFF: 	1 1 1 0 1 1 -8190392601.04200
+chimesFF: 	1 1 1 1 0 1 -8190392601.04200
+chimesFF: 	1 1 1 1 1 0 -8190392601.04200
+chimesFF: 	1 1 1 1 1 1 0.00000
+chimesFF: Read 4B parameters for quadruplets: 2 Zr Zr Cu Cu
+chimesFF: 	0 0 1 0 1 1 13102143.66854
+chimesFF: 	0 1 0 1 0 1 13102143.66854
+chimesFF: 	0 0 1 1 0 0 27864813.03354
+chimesFF: 	0 1 0 0 1 0 27864813.03354
+chimesFF: 	0 0 1 1 0 1 50143360.70196
+chimesFF: 	0 1 0 0 1 1 50143360.70196
+chimesFF: 	0 0 1 1 1 0 -81355772.14223
+chimesFF: 	0 1 0 1 1 0 -81355772.14223
+chimesFF: 	0 1 1 0 1 0 -81355772.14223
+chimesFF: 	0 1 1 1 0 0 -81355772.14223
+chimesFF: 	0 0 1 1 1 1 -133740537.68230
+chimesFF: 	0 1 0 1 1 1 -133740537.68230
+chimesFF: 	0 1 1 0 1 1 -133740537.68230
+chimesFF: 	0 1 1 1 0 1 -133740537.68230
+chimesFF: 	0 1 1 1 1 0 0.00000
+chimesFF: 	0 1 1 1 1 1 198799404.64710
+chimesFF: 	1 0 0 0 0 1 -1283.61546
+chimesFF: 	1 0 0 0 1 1 2494001.49204
+chimesFF: 	1 0 0 1 0 1 2494001.49204
+chimesFF: 	1 0 1 0 0 1 2494001.49204
+chimesFF: 	1 1 0 0 0 1 2494001.49204
+chimesFF: 	1 0 0 1 1 0 174895883.33950
+chimesFF: 	1 1 1 0 0 0 174895883.33950
+chimesFF: 	1 0 0 1 1 1 271317775.49600
+chimesFF: 	1 1 1 0 0 1 271317775.49600
+chimesFF: 	1 0 1 0 1 1 0.00000
+chimesFF: 	1 1 0 1 0 1 0.00000
+chimesFF: 	1 0 1 1 0 0 0.00000
+chimesFF: 	1 1 0 0 1 0 0.00000
+chimesFF: 	1 0 1 1 0 1 0.00000
+chimesFF: 	1 1 0 0 1 1 0.00000
+chimesFF: 	1 0 1 1 1 0 42066560.83107
+chimesFF: 	1 1 0 1 1 0 42066560.83107
+chimesFF: 	1 1 1 0 1 0 42066560.83107
+chimesFF: 	1 1 1 1 0 0 42066560.83107
+chimesFF: 	1 0 1 1 1 1 56101838.91760
+chimesFF: 	1 1 0 1 1 1 56101838.91760
+chimesFF: 	1 1 1 0 1 1 56101838.91760
+chimesFF: 	1 1 1 1 0 1 56101838.91760
+chimesFF: 	1 1 1 1 1 0 0.00000
+chimesFF: 	1 1 1 1 1 1 0.00000
+chimesFF: Read 4B parameters for quadruplets: 3 Zr Zr Zr Cu
+chimesFF: 	0 0 1 0 1 1 35598759.67010
+chimesFF: 	0 0 1 1 0 0 6424292.59931
+chimesFF: 	0 1 0 0 1 0 6424292.59931
+chimesFF: 	1 0 0 0 0 1 6424292.59931
+chimesFF: 	0 0 1 1 0 1 4435192.87735
+chimesFF: 	0 0 1 1 1 0 4435192.87735
+chimesFF: 	0 1 0 0 1 1 4435192.87735
+chimesFF: 	1 0 0 0 1 1 4435192.87735
+chimesFF: 	0 1 1 0 1 0 4435192.87735
+chimesFF: 	1 0 1 0 0 1 4435192.87735
+chimesFF: 	0 0 1 1 1 1 -136734411.86280
+chimesFF: 	0 1 1 0 1 1 -136734411.86280
+chimesFF: 	1 0 1 0 1 1 -136734411.86280
+chimesFF: 	0 1 0 1 0 1 80877071.06658
+chimesFF: 	1 0 0 1 1 0 80877071.06658
+chimesFF: 	1 1 1 0 0 0 80877071.06658
+chimesFF: 	0 1 0 1 1 0 -68593752.53196
+chimesFF: 	1 0 0 1 0 1 -68593752.53196
+chimesFF: 	0 1 1 1 0 0 -68593752.53196
+chimesFF: 	1 0 1 1 0 0 -68593752.53196
+chimesFF: 	1 1 0 0 0 1 -68593752.53196
+chimesFF: 	1 1 0 0 1 0 -68593752.53196
+chimesFF: 	0 1 0 1 1 1 15918361.34600
+chimesFF: 	1 0 0 1 1 1 15918361.34600
+chimesFF: 	0 1 1 1 0 1 15918361.34600
+chimesFF: 	1 0 1 1 1 0 15918361.34600
+chimesFF: 	1 1 1 0 0 1 15918361.34600
+chimesFF: 	1 1 1 0 1 0 15918361.34600
+chimesFF: 	0 1 1 1 1 0 -319149915.76660
+chimesFF: 	1 0 1 1 0 1 -319149915.76660
+chimesFF: 	1 1 0 0 1 1 -319149915.76660
+chimesFF: 	0 1 1 1 1 1 -597539504.29970
+chimesFF: 	1 0 1 1 1 1 -597539504.29970
+chimesFF: 	1 1 1 0 1 1 -597539504.29970
+chimesFF: 	1 1 0 1 0 1 -296194647.46140
+chimesFF: 	1 1 0 1 1 0 -296194647.46140
+chimesFF: 	1 1 1 1 0 0 -296194647.46140
+chimesFF: 	1 1 0 1 1 1 -1303712864.00400
+chimesFF: 	1 1 1 1 0 1 -1303712864.00400
+chimesFF: 	1 1 1 1 1 0 -1303712864.00400
+chimesFF: 	1 1 1 1 1 1 -4698462977.87800
+chimesFF: Read 4B parameters for quadruplets: 4 Zr Zr Zr Zr
+chimesFF: 	0 0 1 0 1 1 13816595.45979
+chimesFF: 	0 1 0 1 0 1 13816595.45979
+chimesFF: 	1 0 0 1 1 0 13816595.45979
+chimesFF: 	1 1 1 0 0 0 13816595.45979
+chimesFF: 	0 0 1 1 0 0 -800669.33525
+chimesFF: 	0 1 0 0 1 0 -800669.33525
+chimesFF: 	1 0 0 0 0 1 -800669.33525
+chimesFF: 	0 0 1 1 0 1 -7578435.55825
+chimesFF: 	0 1 0 0 1 1 -7578435.55825
+chimesFF: 	0 0 1 1 1 0 -7578435.55825
+chimesFF: 	0 1 0 1 1 0 -7578435.55825
+chimesFF: 	1 0 0 0 1 1 -7578435.55825
+chimesFF: 	1 0 0 1 0 1 -7578435.55825
+chimesFF: 	0 1 1 0 1 0 -7578435.55825
+chimesFF: 	0 1 1 1 0 0 -7578435.55825
+chimesFF: 	1 0 1 0 0 1 -7578435.55825
+chimesFF: 	1 1 0 0 0 1 -7578435.55825
+chimesFF: 	1 0 1 1 0 0 -7578435.55825
+chimesFF: 	1 1 0 0 1 0 -7578435.55825
+chimesFF: 	0 0 1 1 1 1 -3680943.67954
+chimesFF: 	0 1 0 1 1 1 -3680943.67954
+chimesFF: 	1 0 0 1 1 1 -3680943.67954
+chimesFF: 	0 1 1 0 1 1 -3680943.67954
+chimesFF: 	0 1 1 1 0 1 -3680943.67954
+chimesFF: 	1 0 1 0 1 1 -3680943.67954
+chimesFF: 	1 1 0 1 0 1 -3680943.67954
+chimesFF: 	1 0 1 1 1 0 -3680943.67954
+chimesFF: 	1 1 0 1 1 0 -3680943.67954
+chimesFF: 	1 1 1 0 0 1 -3680943.67954
+chimesFF: 	1 1 1 0 1 0 -3680943.67954
+chimesFF: 	1 1 1 1 0 0 -3680943.67954
+chimesFF: 	0 1 1 1 1 0 -37719087.36607
+chimesFF: 	1 0 1 1 0 1 -37719087.36607
+chimesFF: 	1 1 0 0 1 1 -37719087.36607
+chimesFF: 	0 1 1 1 1 1 -16025241.90726
+chimesFF: 	1 0 1 1 1 1 -16025241.90726
+chimesFF: 	1 1 0 1 1 1 -16025241.90726
+chimesFF: 	1 1 1 0 1 1 -16025241.90726
+chimesFF: 	1 1 1 1 0 1 -16025241.90726
+chimesFF: 	1 1 1 1 1 0 -16025241.90726
+chimesFF: 	1 1 1 1 1 1 32675507.66556
+chimesFF: Built the following 4-body pair "slow" map:
+chimesFF: 	4 ZrZrZrZrZrZrZrZrZrZrZrZr
+chimesFF: 	3 ZrZrZrZrCuZrZrZrCuZrCuZr
+chimesFF: 	3 ZrZrCuZrZrZrCuZrZrZrCuZr
+chimesFF: 	2 ZrZrCuZrCuZrCuZrCuZrCuCu
+chimesFF: 	3 CuZrZrZrZrZrCuZrCuZrZrZr
+chimesFF: 	2 CuZrZrZrCuZrCuZrCuCuCuZr
+chimesFF: 	2 CuZrCuZrZrZrCuCuCuZrCuZr
+chimesFF: 	3 CuZrCuZrCuZrZrZrZrZrZrZr
+chimesFF: 	1 CuZrCuZrCuZrCuCuCuCuCuCu
+chimesFF: 	2 CuZrCuZrCuCuZrZrCuZrCuZr
+chimesFF: 	2 CuZrCuCuCuZrCuZrZrZrCuZr
+chimesFF: 	1 CuZrCuCuCuCuCuZrCuZrCuCu
+chimesFF: 	2 CuCuCuZrCuZrCuZrCuZrZrZr
+chimesFF: 	1 CuCuCuZrCuCuCuZrCuCuCuZr
+chimesFF: 	1 CuCuCuCuCuZrCuCuCuZrCuZr
+chimesFF: 	0 CuCuCuCuCuCuCuCuCuCuCuCu
+chimesFF: Built the following 4-body pair "fast" map:
+chimesFF: 	0 0
+chimesFF: 	1 1
+chimesFF: 	2 1
+chimesFF: 	3 2
+chimesFF: 	4 1
+chimesFF: 	5 2
+chimesFF: 	6 2
+chimesFF: 	7 3
+chimesFF: 	8 1
+chimesFF: 	9 2
+chimesFF: 	10 2
+chimesFF: 	11 3
+chimesFF: 	12 2
+chimesFF: 	13 3
+chimesFF: 	14 3
+chimesFF: 	15 4
+chimesFF: Set the following special 4-body outer cutoffs: 
+chimesFF: 	0 4.00000 4.00000 4.00000 4.00000 4.00000 4.00000
+chimesFF: 	1 4.00000 4.00000 4.00000 4.00000 4.00000 4.00000
+chimesFF: 	2 4.00000 4.00000 4.00000 4.00000 4.00000 4.00000
+chimesFF: 	3 4.00000 4.00000 4.00000 4.00000 4.00000 4.00000
+chimesFF: 	4 4.00000 4.00000 4.00000 4.00000 4.00000 4.00000
+Attempting to match LAMMPS and ChIMES atom types by comparing masses. Looking for matches within a tolerance of 1e-3.
+LAMMPS atom type idx: 1 LAMMPS mass: 63.54600 ; ChIMES atom type idx: 0 ChIMES mass: 63.54600 ... status: 
+Match
+LAMMPS atom type idx: 2 LAMMPS mass: 91.22400 ; ChIMES atom type idx: 0 ChIMES mass: 63.54600 ... status: 
+LAMMPS atom type idx: 2 LAMMPS mass: 91.22400 ; ChIMES atom type idx: 1 ChIMES mass: 91.22400 ... status: 
+Match
+chimesFF: 	Setting 3-body max cutoff to: 4.00000
+chimesFF: 	Setting 4-body max cutoff to: 4.00000
+
+CITE-CITE-CITE-CITE-CITE-CITE-CITE-CITE-CITE-CITE-CITE-CITE-CITE
+
+Your simulation uses code contributions which should be cited:
+- Type Label Framework: https://doi.org/10.1021/acs.jpcb.3c08419
+The log file lists these citations in BibTeX format.
+
+CITE-CITE-CITE-CITE-CITE-CITE-CITE-CITE-CITE-CITE-CITE-CITE-CITE
+
+WARNING: No fixes with time integration, atoms won't move (../verlet.cpp:60)
+Generated 0 of 1 mixed pair_coeff terms from geometric mixing rule
+Neighbor list info ...
+  update: every = 1 steps, delay = 0 steps, check = yes
+  max neighbors/atom: 2000, page size: 100000
+  master list distance cutoff = 8
+  ghost atom cutoff = 8
+  binsize = 4, bins = 3 3 5
+  1 neighbor lists, perpetual/occasional/extra = 1 0 0
+  (1) pair chimesFF, perpetual
+      attributes: full, newton on, ghost
+      pair build: full/bin/ghost
+      stencil: full/ghost/bin/3d
+      bin: standard
+Setting up Verlet run ...
+  Unit style    : real
+  Current step  : 0
+  Time step     : 1
+Updating chimesFF neighbor lists...
+	Rank 0 3-body list size: 52
+	Rank 0 4-body list size: 40
+	...update complete
+Per MPI rank memory allocation (min/avg/max) = 2.995 | 2.995 | 2.996 Mbytes
+   Step          Time          KinEng         PotEng         TotEng          Temp          Press           Pxx            Pyy            Pzz            Pxy            Pxz            Pyz           Volume    
+         0               0.00000            127.87675     -986685238.32650     -986685110.44975            300.00000   -82537733609.69356   -70155823173.36006   -99017317264.64142   -78440060391.07916     1821595901.12914    -2746967381.62936     5813284900.85339           2558.59015
+Loop time of 4.35886e-06 on 36 procs for 0 steps with 144 atoms
+
+82.8% CPU use with 36 MPI tasks x no OpenMP threads
+
+MPI task timing breakdown:
+Section |  min time  |  avg time  |  max time  |%varavg| %total
+---------------------------------------------------------------
+Pair    | 0          | 0          | 0          |   0.0 |  0.00
+Neigh   | 0          | 0          | 0          |   0.0 |  0.00
+Comm    | 0          | 0          | 0          |   0.0 |  0.00
+Output  | 0          | 0          | 0          |   0.0 |  0.00
+Modify  | 0          | 0          | 0          |   0.0 |  0.00
+Other   |            | 4.359e-06  |            |       |100.00
+
+Nlocal:              4 ave           7 max           1 min
+Histogram: 2 4 0 7 0 11 5 0 5 2
+Nghost:         464.75 ave         490 max         436 min
+Histogram: 3 3 6 4 1 2 2 5 4 6
+Neighs:              0 ave           0 max           0 min
+Histogram: 36 0 0 0 0 0 0 0 0 0
+FullNghs:      489.056 ave         923 max          97 min
+Histogram: 2 4 6 7 0 5 5 0 5 2
+
+Total # of neighbors = 17606
+Ave neighs/atom = 122.26389
+Neighbor list builds = 0
+Dangerous builds = 0
+Total wall time: 0:00:01

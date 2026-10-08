@@ -207,6 +207,37 @@ With the cleaned cluster lists, you can now generate the cluster-graph fingerpri
 
 This step requires the ``[CHIMES PARAMETER FILE]`` file used to run the ChIMES-LAMMPS simulation to provide the necessary element indexing for fingerprint computation.
 
+Element-aware (multielement) fingerprints
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+For multielement systems, the ``FINGERPRINT`` build also compiles ``histogram_hybrid``, which adds element awareness to the cluster-graph fingerprint through a single tunable weight :math:`\alpha \in [0,1]`. The dissimilarity between two clusters is a convex blend of a structural and a compositional term, each normalized to :math:`[0,1]`:
+
+.. math::
+
+    D_{total} = \alpha \, D_{struct} + (1 - \alpha) \, D_{comp}
+
+- ``alpha = 1`` – structure only: Euclidean distance between the sorted, Morse-transformed edge lengths of the two clusters.
+- ``alpha = 0`` – composition only: for 2-body clusters, the 1-Wasserstein distance between the sorted atomic descriptors; for 3- and 4-body clusters, the Euclidean distance between the per-atom descriptor vectors with the atoms ordered by geometric centrality (smallest sum of pair distances first), so the same stoichiometry in different arrangements is resolved.
+- ``0 < alpha < 1`` – a blend of the two.
+
+Element awareness is added without increasing the dimensionality of the fingerprint. Each element's atomic descriptor is read from the ``# TYPEIDX #`` block of the ChIMES parameter file: an optional fifth column is used if present, and the atomic mass otherwise. For example, to use electronegativity rather than mass:
+
+.. code-block:: text
+
+    # TYPEIDX #	# ATM_TYP #	# ATMCHRG #	# ATMMASS #	# DESCRIPTOR #
+    0		Cu		0		63.546		1.90
+    1		Zr		0		91.224		1.33
+
+Generate the cluster lists and run ``post_process.sh`` exactly as above, then build the fingerprints for a given :math:`\alpha`:
+
+.. code-block:: bash
+
+    srun -n <nprocs> /path/to/your/chimes_calculator/repository/chimesFF/src/FP/histogram_hybrid [CHIMES PARAMETER FILE] <alpha> [debug]
+
+The optional ``debug`` flag prints the structural and compositional terms for the first few cluster pairs. Output files have the same names and format as those from ``histogram``, with 100 bins spanning a normalized dissimilarity of 0 to 1. Each run overwrites the previous ``.hist`` files, so rename them (or use separate directories) when sweeping :math:`\alpha`.
+
+A complete example for a disordered Cu\ :sub:`50`\ Zr\ :sub:`50` configuration, sweeping :math:`\alpha` = 1.0, 0.5, and 0.0, is provided in ``etc/lmp/tests/example-multielement_fingerprint`` (run with ``./run_job.sh <nprocs>``).
+
 Output
 ^^^^^^^^^
 

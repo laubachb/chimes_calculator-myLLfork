@@ -7,6 +7,7 @@ rm -rf example-basic_carbon2.0/current_output
 rm -rf example-basic_HN3/current_output
 rm -rf example-coarsegrained/current_output
 rm -rf example-fingerprint/current_output
+rm -rf example-multielement_fingerprint/current_output
 rm -rf example-Si+D2/current_output
 rm -rf example-tabulate/current_output
 rm -rf example-Turbo_ChIMES/current_output

@@ -26,6 +26,7 @@ namespace GlobalParams {
     vector<double> morse_lambda_list;
     vector<double> atomic_descriptors;
     double max_descr;
+    double min_descr;
 
     // Add mapping vectors
     vector <int> atom_int_pair_mapping;
@@ -1362,6 +1363,8 @@ void chimesFF::read_parameters(string paramfile)
     GlobalParams::atomic_descriptors = atomic_des;
     double max_descriptor = *std::max_element(atomic_des.begin(), atomic_des.end());
     GlobalParams::max_descr = max_descriptor;
+    double min_descriptor = *std::min_element(atomic_des.begin(), atomic_des.end());
+    GlobalParams::min_descr = min_descriptor;
 
     GlobalParams::atom_int_pair_mapping = atom_int_pair_map;
     GlobalParams::atom_int_trip_mapping = atom_int_trip_map;

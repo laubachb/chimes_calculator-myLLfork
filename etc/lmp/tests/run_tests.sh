@@ -128,6 +128,25 @@ python3 ../../compare_fingerprints.py ../expected_output/0-0.4b_clu-s.hist 0-0.4
 
 cd - > /dev/null 2>&1
 
+rm -rf example-multielement_fingerprint/current_output > /dev/null 2>&1
+mkdir -p example-multielement_fingerprint/current_output
+cd example-multielement_fingerprint/current_output
+cp ../* . > /dev/null 2>&1
+
+echo "Running test: example-multielement_fingerprint"
+./run_job.sh 36 > run_job.log
+
+for alpha in 1.0 0.5 0.0
+do
+    for body in 2b 3b 4b
+    do
+        hist=0-0.${body}_clu-s.alpha_${alpha}.hist
+        python3 ../../compare_fingerprints.py ../expected_output/${hist} ${hist} > compare.${hist}.lammps
+    done
+done
+
+cd - > /dev/null 2>&1
+
 
 
 

@@ -41,6 +41,7 @@ namespace GlobalParams {
     extern vector<double> morse_lambda_list;
     extern vector<double> atomic_descriptors;
     extern double max_descr;
+    extern double min_descr;
 
     // Add mapping vectors
     extern vector <int> atom_int_pair_mapping;

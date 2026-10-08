@@ -61,6 +61,15 @@ mv log.lammps out.lammps 0-0.{2,3,4}b_clu-s.hist expected_output
 cd -
 
 
+echo "Working on example-multielement_fingerprint"
+cd example-multielement_fingerprint
+./run_job.sh 36
+mkdir expected_output > /dev/null 2>&1
+mv log.lammps out.lammps 0-0.{2,3,4}b_clu-s.alpha_*.hist expected_output
+rm -f *-clusters.txt histogram.alpha_*.log traj.lammpstrj
+cd -
+
+
 
 ################# TABULATE
 

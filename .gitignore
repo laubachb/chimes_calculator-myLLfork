@@ -21,3 +21,7 @@ etc/lmp/build.err
 
 # Local vendored LAMMPS checkout (keep out of git)
 etc/lammps/
+
+# Fingerprint histogram executables (built by etc/lmp/install.sh FINGERPRINT)
+chimesFF/src/FP/histogram
+chimesFF/src/FP/histogram_hybrid

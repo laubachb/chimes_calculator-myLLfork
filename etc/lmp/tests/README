@@ -17,4 +17,4 @@ Each example/test folder contains all the input you need to run the test in ques
 
 srun -n 36 ../exe/lmp_mpi_chimes -i in.lammps | tee out.lammps
 
-* To run the tabulation test, you need to install using "./install.sh TABULATION". To run the fingerprint test, you need to install using "./install.sh FINGERPRINT" and run the example via something like ./run_jobs.sh 36". See the scripts in question and documentation for additional details.
+* To run the tabulation test, you need to install using "./install.sh TABULATION". To run the fingerprint test, you need to install using "./install.sh FINGERPRINT" and run the example via something like ./run_jobs.sh 36". The same build provides the element-aware fingerprint example (example-multielement_fingerprint, run with ./run_job.sh 36), which sweeps the structure/composition weight alpha. See the scripts in question and documentation for additional details.
