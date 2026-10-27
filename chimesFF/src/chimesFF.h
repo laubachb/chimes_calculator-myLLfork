@@ -336,6 +336,7 @@ public:
     bool   fastmb_cluster_active(int nbody, int key, const int *pair_idxs); // True if the cluster type is included and every slot pair is inside its outer cutoff
     bool   fastmb_compute_cluster(int nbody, int key, const int *pair_idxs, double & energy, double *deriv); // Energy and dE/dr per slot of one cluster; returns false if the cluster is inactive
     void   fastmb_compute_batch(int nbody, int key, const int *pair_idxs, int nclusters, double *energy, double *deriv); // Same for up to fastmb_lanes active clusters of one key, swept together; pair_idxs[c*npairs + slot], energy[c], deriv[c*npairs + slot]
+    void   fastmb_memory(size_t & cache_bytes, size_t & tree_bytes);        // Bytes held by the pair caches and by the coefficient trees (for reporting)
 #endif
 
 private:

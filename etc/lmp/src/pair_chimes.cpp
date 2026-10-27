@@ -81,6 +81,9 @@ PairCHIMES::PairCHIMES(LAMMPS *lmp) : Pair(lmp)
     fastmb_rips = true;
     fastmb_hash_ownership = true;
     fastmb_warned_self_image = false;
+    fastmb_timing = getenv("CHIMES_TIMING") && (atoi(getenv("CHIMES_TIMING")) > 0);
+    fastmb_time_neighlist = fastmb_time_registry = fastmb_time_cache = 0.0;
+    fastmb_time_2b = fastmb_time_3b = fastmb_time_4b = 0.0;
 #endif
 #ifdef FINGERPRINT
     fingerprint = false;
@@ -122,6 +125,9 @@ PairCHIMES::PairCHIMES(LAMMPS *lmp) : Pair(lmp)
 
 PairCHIMES::~PairCHIMES()
 {
+#ifdef FASTMB
+	report_fastmb_instrumentation();
+#endif
 	if (allocated) 
 	{   	    
 	    memory->destroy(setflag);
@@ -664,12 +670,19 @@ void PairCHIMES::compute(int eflag, int vflag)
 			std::cout << "Updating chimesFF neighbor lists..." << std::endl;
 			
 #ifdef FASTMB
+		double time_0 = MPI_Wtime();
+
 		if (!(use_fastmb && fastmb_rips && build_fastmb_neighlists()))
 #endif
 		build_mb_neighlists();		
 #ifdef FASTMB
+		double time_1 = MPI_Wtime();
+
 		if (use_fastmb)
 			build_fastmb_pair_registry();
+
+		fastmb_time_neighlist += time_1 - time_0;
+		fastmb_time_registry  += MPI_Wtime() - time_1;
 #endif
 		if (chimes_calculator.rank == 0)
 		{
@@ -686,6 +699,9 @@ void PairCHIMES::compute(int eflag, int vflag)
 	////////////////////////////////////////
 	// Compute 1- and 2-body interactions
 	////////////////////////////////////////
+#ifdef FASTMB
+	double time_2b = MPI_Wtime();
+#endif
 	for (ii = 0; ii < inum; ii++)		// Loop over the atoms owned by the current process
 	{
 		i     = ilist[ii];				// Index of the current atom
@@ -783,6 +799,10 @@ void PairCHIMES::compute(int eflag, int vflag)
 	}
 	#endif
 
+#ifdef FASTMB
+	fastmb_time_2b += MPI_Wtime() - time_2b;
+#endif
+
     // Document badness for configuration: current timestep, current rank, worst badness seen by rank
     if (for_fitting)
         if(update->ntimestep % output->every_dump[0] == 0)
@@ -798,6 +818,8 @@ void PairCHIMES::compute(int eflag, int vflag)
 
 		// Distance and cutoff-weighted polynomials of every registered pair, once per step
 
+		double time_cache = MPI_Wtime();
+
 		for (int p = 0; p < fastmb_pair_i.size(); p++)
 		{
 			i = fastmb_pair_i[p];
@@ -808,15 +830,26 @@ void PairCHIMES::compute(int eflag, int vflag)
 			chimes_calculator.fastmb_fill_cache(p, chimes_calculator.fastmb_pair_type(chimes_type[type[i]-1], chimes_type[type[j]-1]), fastmb_pair_r[p]);
 		}
 
+		double time_3b = MPI_Wtime();
+
 		compute_fastmb(3);
+
+		double time_4b = MPI_Wtime();
 
 		if (chimes_calculator.poly_orders[2] > 0)
 			compute_fastmb(4);
+
+		fastmb_time_cache += time_3b - time_cache;
+		fastmb_time_3b    += time_4b - time_3b;
+		fastmb_time_4b    += MPI_Wtime() - time_4b;
 	}
 	else
 #endif
 	if (chimes_calculator.poly_orders[1] > 0)
 	{
+#ifdef FASTMB
+		double time_3b = MPI_Wtime();
+#endif
 		////////////////////////////////////////
 		// Compute 3-body interactions
 		////////////////////////////////////////
@@ -878,6 +911,9 @@ void PairCHIMES::compute(int eflag, int vflag)
 			if (evflag)
 				ev_tally_mb(3, 3, atmidxlst, energy, stensor);		            
 		}		
+#ifdef FASTMB
+		fastmb_time_3b += MPI_Wtime() - time_3b;
+#endif
 	}
 	#ifdef FINGERPRINT
 	if (tmp_FP)
@@ -890,6 +926,8 @@ void PairCHIMES::compute(int eflag, int vflag)
 
     // if (chimes_calculator.poly_orders[2] > 0 || tmp_FP)
 #ifdef FASTMB
+	double time_4b = MPI_Wtime();
+
 	if (!use_fastmb)    // Otherwise already done with the 3-body term above
 #endif
 	if (chimes_calculator.poly_orders[2] > 0)
@@ -963,6 +1001,9 @@ void PairCHIMES::compute(int eflag, int vflag)
 				ev_tally_mb(4, 6, atmidxlst, energy, stensor);	
             
 		}
+#ifdef FASTMB
+		fastmb_time_4b += MPI_Wtime() - time_4b;
+#endif
 	}
 	#ifdef FINGERPRINT
 	if (tmp_FP)
@@ -980,6 +1021,95 @@ if (vflag_fdotr)
 }
 
 #ifdef FASTMB
+
+void PairCHIMES::report_fastmb_instrumentation()
+{
+	// CHIMES_TIMING=1: seconds spent in each phase, maximum and mean over ranks.
+	// CHIMES_MEMORY=1: bytes held by the many-body data structures on each rank and the process
+	// high-water mark (VmHWM from /proc/self/status). Both are benchmark instrumentation.
+
+	if (fastmb_timing)
+	{
+		double local[6] = {fastmb_time_neighlist, fastmb_time_registry, fastmb_time_cache, fastmb_time_2b, fastmb_time_3b, fastmb_time_4b};
+		double maxima[6], sums[6];
+
+		MPI_Allreduce(local, maxima, 6, MPI_DOUBLE, MPI_MAX, world);
+		MPI_Allreduce(local, sums,   6, MPI_DOUBLE, MPI_SUM, world);
+
+		if (comm->me == 0)
+		{
+			const char *names[6] = {"mb_neighlist", "pair_registry", "pair_cache", "2body", "3body", "4body"};
+
+			for (int k = 0; k < 6; k++)
+				printf("CHIMES_TIMING %-14s max %12.6f s  mean %12.6f s\n", names[k], maxima[k], sums[k]/comm->nprocs);
+		}
+	}
+
+	if (use_fastmb && getenv("CHIMES_MEMORY") && (atoi(getenv("CHIMES_MEMORY")) > 0))
+	{
+		auto list_bytes = [](const std::vector<std::vector<int> > & lists) -> double
+		{
+			double bytes = lists.capacity() * sizeof(std::vector<int>);
+
+			for (int c = 0; c < lists.size(); c++)
+				bytes += lists[c].capacity() * sizeof(int);
+
+			return bytes;
+		};
+
+		size_t cache_bytes, tree_bytes;
+
+		chimes_calculator.fastmb_memory(cache_bytes, tree_bytes);
+
+		double batch_bytes = 0.0;
+
+		for (int k = 0; k < fastmb_batches.size(); k++)
+			batch_bytes += fastmb_batches[k].capacity() * sizeof(int);
+
+		double local[8] = {
+			list_bytes(neighborlist_3mers),
+			list_bytes(neighborlist_4mers),
+			(double)(fastmb_3mer_pair_idx.capacity() + fastmb_4mer_pair_idx.capacity()) * sizeof(int),
+			(double)(fastmb_registry_keys.capacity() * sizeof(long long) + fastmb_registry_vals.capacity() * sizeof(int)
+			         + (fastmb_pair_i.capacity() + fastmb_pair_j.capacity()) * sizeof(int)
+			         + (fastmb_pair_r.capacity() + fastmb_pair_dr.capacity()) * sizeof(double)),
+			(double)cache_bytes, batch_bytes, (double)tree_bytes, 0.0 };
+
+		if (FILE *fp = fopen("/proc/self/status", "r"))
+		{
+			char line[256];
+
+			while (fgets(line, sizeof line, fp))
+				if (!strncmp(line, "VmHWM:", 6))
+					local[7] = atof(line + 6) * 1024.0;
+
+			fclose(fp);
+		}
+
+		double maxima[8], minima[8], sums[8];
+
+		MPI_Allreduce(local, maxima, 8, MPI_DOUBLE, MPI_MAX, world);
+		MPI_Allreduce(local, minima, 8, MPI_DOUBLE, MPI_MIN, world);
+		MPI_Allreduce(local, sums,   8, MPI_DOUBLE, MPI_SUM, world);
+
+		long long counts[3] = {(long long)neighborlist_3mers.size(), (long long)neighborlist_4mers.size(), (long long)fastmb_pair_i.size()};
+		long long count_sums[3], count_maxima[3];
+
+		MPI_Allreduce(counts, count_sums,   3, MPI_LONG_LONG, MPI_SUM, world);
+		MPI_Allreduce(counts, count_maxima, 3, MPI_LONG_LONG, MPI_MAX, world);
+
+		if (comm->me == 0)
+		{
+			const char *names[8] = {"list_3mers", "list_4mers", "slot_pair_ids", "pair_registry", "pair_cache", "batches", "trees", "vm_hwm"};
+
+			for (int k = 0; k < 8; k++)
+				printf("CHIMES_MEMORY %-14s min %14.0f  mean %14.0f  max %14.0f bytes\n", names[k], minima[k], sums[k]/comm->nprocs, maxima[k]);
+
+			printf("CHIMES_MEMORY counts 3mers total %lld max %lld  4mers total %lld max %lld  pairs total %lld max %lld\n",
+			       count_sums[0], count_maxima[0], count_sums[1], count_maxima[1], count_sums[2], count_maxima[2]);
+		}
+	}
+}
 
 bool PairCHIMES::build_fastmb_neighlists()
 {

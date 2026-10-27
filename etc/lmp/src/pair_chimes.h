@@ -94,6 +94,18 @@ namespace LAMMPS_NS
 			std::vector<int>       fastmb_registry_vals; // Pair index of the pair stored in the same table slot
 			std::vector<std::vector<int> > fastmb_batches; // [cluster key] clusters waiting for a full SIMD batch
 
+			// Benchmark instrumentation, printed at exit: phase timers (env CHIMES_TIMING=1) and the
+			// memory held by the many-body data structures (env CHIMES_MEMORY=1)
+
+			bool   fastmb_timing;
+			double fastmb_time_neighlist;               // Seconds in the many-body neighbor list builds, this rank
+			double fastmb_time_registry;                // ... in the pair registry builds
+			double fastmb_time_cache;                   // ... filling the pair cache
+			double fastmb_time_2b;                      // ... in the 1- and 2-body loop
+			double fastmb_time_3b;                      // ... in the 3-body term
+			double fastmb_time_4b;                      // ... in the 4-body term
+			void   report_fastmb_instrumentation();     // The two reports, rank 0
+
 			bool   build_fastmb_neighlists();           // Cluster lists by bitset intersection; false if the box is too small (caller then uses build_mb_neighlists on every rank)
 			void   build_fastmb_pair_registry();        // Assigns pair indices to the pairs of the many-body neighbor lists
 			void   compute_fastmb(int nbody);           // 3- or 4-body forces, energy and virial from the pair cache

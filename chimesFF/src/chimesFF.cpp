@@ -3579,6 +3579,28 @@ bool chimesFF::fastmb_compute_cluster(int nbody, int key, const int *pair_idxs, 
     return true;
 }
 
+void chimesFF::fastmb_memory(size_t & cache_bytes, size_t & tree_bytes)
+{
+    cache_bytes = (fastmb_cache_3b.data.capacity()   + fastmb_cache_4b.data.capacity())   * sizeof(double)
+                + (fastmb_cache_3b.offset.capacity() + fastmb_cache_4b.offset.capacity()) * sizeof(int);
+
+    tree_bytes = 0;
+
+    for (int t = 0; t < fastmb_trees_3b.size(); t++)
+    {
+        for (int k = 0; k < 3; k++) tree_bytes += fastmb_trees_3b[t].power[k].capacity();
+        for (int k = 0; k < 2; k++) tree_bytes += fastmb_trees_3b[t].child[k].capacity() * sizeof(int);
+        tree_bytes += fastmb_trees_3b[t].coeff.capacity() * sizeof(double);
+    }
+
+    for (int q = 0; q < fastmb_trees_4b.size(); q++)
+    {
+        for (int k = 0; k < 6; k++) tree_bytes += fastmb_trees_4b[q].power[k].capacity();
+        for (int k = 0; k < 5; k++) tree_bytes += fastmb_trees_4b[q].child[k].capacity() * sizeof(int);
+        tree_bytes += fastmb_trees_4b[q].coeff.capacity() * sizeof(double);
+    }
+}
+
 void chimesFF::fastmb_compute_batch(int nbody, int key, const int *pair_idxs, int nclusters, double *energy, double *deriv)
 {
     // Energies and distance derivatives of up to fastmb_lanes clusters of one type, which share one
