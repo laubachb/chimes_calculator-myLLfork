@@ -324,6 +324,9 @@ public:
     // cluster in the order ij ik jk (3-body) or ij ik il jk jl kl (4-body). A cluster key is the
     // integer fastmb_cluster_key builds from the atom type indices of a cluster in slot order.
 
+    static const int fastmb_max_order = 25;   // Largest 3-/4-body polynomial order the batch buffers hold
+    static const int fastmb_lanes     = 8;    // Clusters evaluated together by one sweep: 8 doubles fill one AVX-512 register
+
     string fastmb_init();                                                   // Builds the cutoff-variant tables and coefficient trees; returns "" or the reason the parameter file cannot use fastmb
     void   fastmb_resize_cache(int npairs);                                 // Allocates the cache for npairs registered pairs
     void   fastmb_fill_cache(int pair_idx, int pair_typ, double dx);        // Stores X and D of one pair at distance dx, for every cutoff variant of its pair type
@@ -332,6 +335,7 @@ public:
     int    fastmb_ncluster_keys(int nbody);                                 // Number of possible cluster keys
     bool   fastmb_cluster_active(int nbody, int key, const int *pair_idxs); // True if the cluster type is included and every slot pair is inside its outer cutoff
     bool   fastmb_compute_cluster(int nbody, int key, const int *pair_idxs, double & energy, double *deriv); // Energy and dE/dr per slot of one cluster; returns false if the cluster is inactive
+    void   fastmb_compute_batch(int nbody, int key, const int *pair_idxs, int nclusters, double *energy, double *deriv); // Same for up to fastmb_lanes active clusters of one key, swept together; pair_idxs[c*npairs + slot], energy[c], deriv[c*npairs + slot]
 #endif
 
 private:

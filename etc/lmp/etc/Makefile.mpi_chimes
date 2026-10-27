@@ -7,7 +7,8 @@ SHELL = /bin/sh
 # specify flags and libraries needed for your compiler
 
 CC         = mpiicpc
-CCFLAGS =	-O3 -std=c++11 -restrict
+# -qopenmp-simd lets the fastmb SIMD batches vectorize; add the target ISA (e.g. -xCORE-AVX512) for full speed
+CCFLAGS =	-O3 -std=c++11 -restrict -qopenmp-simd
 SHFLAGS =	-fPIC
 DEPFLAGS =	-M
 

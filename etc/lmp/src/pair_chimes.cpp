@@ -74,6 +74,7 @@ PairCHIMES::PairCHIMES(LAMMPS *lmp) : Pair(lmp)
     for_fitting = false;
 #ifdef FASTMB
     use_fastmb  = false;
+    fastmb_simd = true;
 #endif
 #ifdef FINGERPRINT
     fingerprint = false;
@@ -128,7 +129,8 @@ PairCHIMES::~PairCHIMES()
 void PairCHIMES::settings(int narg, char **arg)
 {
 #ifdef FASTMB
-	// The keyword fastmb, anywhere in the argument list, selects the fast many-body evaluation.
+	// The keyword fastmb, anywhere in the argument list, selects the fast many-body evaluation;
+	// nosimd evaluates clusters one at a time instead of in SIMD batches (for testing).
 	// The remaining arguments are handled as before.
 
 	std::vector<char *> other_args;
@@ -137,6 +139,8 @@ void PairCHIMES::settings(int narg, char **arg)
 	{
 		if (utils::strmatch(arg[a], "^fastmb$"))
 			use_fastmb = true;
+		else if (utils::strmatch(arg[a], "^nosimd$"))
+			fastmb_simd = false;
 		else
 			other_args.push_back(arg[a]);
 	}
@@ -293,7 +297,7 @@ void PairCHIMES::coeff(int narg, char **arg)
 			error -> all(FLERR, "pair_style chimesFF fastmb: " + why);
 
 		if (comm->me == 0)
-			std::cout << "chimesFF: fastmb many-body evaluation enabled" << std::endl;
+			std::cout << "chimesFF: fastmb many-body evaluation enabled; SIMD batches " << (fastmb_simd ? "on" : "off") << std::endl;
 	}
 #endif
 }
@@ -1043,28 +1047,17 @@ void PairCHIMES::compute_fastmb(int nbody)
 	double energy_sum = 0.0;
 	double stress_sum[6] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
 
-	for (int c = 0; c < clusters.size(); c++)
+	// Forces and stress of each slot of one evaluated cluster from its dE/dr, then the tallies
+
+	auto apply_cluster = [&](int c, double energy, const double *deriv)
 	{
 		const int *atoms = clusters[c].data();
-
-		for (int a = 0; a < nbody; a++)
-			typ_idxs[a] = chimes_type[type[atoms[a]]-1];
-
-		for (int s = 0; s < npairs; s++)
-			pair_idxs[s] = cluster_pair_idx[npairs*c + s] >> 1;
-
-		int key = chimes_calculator.fastmb_cluster_key(nbody, typ_idxs);
-
-		if (!chimes_calculator.fastmb_compute_cluster(nbody, key, pair_idxs, energy, deriv))
-			continue;
-
-		// Forces and stress of each slot from dE/dr
 
 		double stress[6] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
 
 		for (int s = 0; s < npairs; s++)
 		{
-			int     p       = pair_idxs[s];
+			int     p       = cluster_pair_idx[npairs*c + s] >> 1;
 			double  sign    = (cluster_pair_idx[npairs*c + s] & 1) ? -1.0 : 1.0;	// slot runs against the stored direction
 			double *dr      = &fastmb_pair_dr[CHDIM*p];
 			double  fscalar = deriv[s] / fastmb_pair_r[p];
@@ -1104,6 +1097,84 @@ void PairCHIMES::compute_fastmb(int nbody)
 
 			for (int k = 0; k < 6; k++)
 				stress_sum[k] += stress[k];
+		}
+	};
+
+	if (fastmb_simd)
+	{
+		// Active clusters are collected per cluster key and swept fastmb_lanes at a time
+
+		const int lanes = chimesFF::fastmb_lanes;
+		const int nkeys = chimes_calculator.fastmb_ncluster_keys(nbody);
+
+		if (fastmb_batches.size() < nkeys)
+			fastmb_batches.resize(nkeys);
+
+		for (int k = 0; k < nkeys; k++)
+			fastmb_batches[k].clear();
+
+		int    batch_pair_idxs[chimesFF::fastmb_lanes * 6];
+		double batch_energy[chimesFF::fastmb_lanes];
+		double batch_deriv[chimesFF::fastmb_lanes * 6];
+
+		auto sweep_batch = [&](int key)
+		{
+			std::vector<int> & batch = fastmb_batches[key];
+			int nclusters = batch.size();
+
+			for (int w = 0; w < nclusters; w++)
+				for (int s = 0; s < npairs; s++)
+					batch_pair_idxs[w*npairs + s] = cluster_pair_idx[npairs*batch[w] + s] >> 1;
+
+			chimes_calculator.fastmb_compute_batch(nbody, key, batch_pair_idxs, nclusters, batch_energy, batch_deriv);
+
+			for (int w = 0; w < nclusters; w++)
+				apply_cluster(batch[w], batch_energy[w], &batch_deriv[w*npairs]);
+
+			batch.clear();
+		};
+
+		for (int c = 0; c < clusters.size(); c++)
+		{
+			const int *atoms = clusters[c].data();
+
+			for (int a = 0; a < nbody; a++)
+				typ_idxs[a] = chimes_type[type[atoms[a]]-1];
+
+			for (int s = 0; s < npairs; s++)
+				pair_idxs[s] = cluster_pair_idx[npairs*c + s] >> 1;
+
+			int key = chimes_calculator.fastmb_cluster_key(nbody, typ_idxs);
+
+			if (!chimes_calculator.fastmb_cluster_active(nbody, key, pair_idxs))
+				continue;
+
+			fastmb_batches[key].push_back(c);
+
+			if (fastmb_batches[key].size() == lanes)
+				sweep_batch(key);
+		}
+
+		for (int k = 0; k < nkeys; k++)
+			if (!fastmb_batches[k].empty())
+				sweep_batch(k);
+	}
+	else
+	{
+		for (int c = 0; c < clusters.size(); c++)
+		{
+			const int *atoms = clusters[c].data();
+
+			for (int a = 0; a < nbody; a++)
+				typ_idxs[a] = chimes_type[type[atoms[a]]-1];
+
+			for (int s = 0; s < npairs; s++)
+				pair_idxs[s] = cluster_pair_idx[npairs*c + s] >> 1;
+
+			int key = chimes_calculator.fastmb_cluster_key(nbody, typ_idxs);
+
+			if (chimes_calculator.fastmb_compute_cluster(nbody, key, pair_idxs, energy, deriv))
+				apply_cluster(c, energy, deriv);
 		}
 	}
 

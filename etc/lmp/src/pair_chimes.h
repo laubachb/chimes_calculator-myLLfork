@@ -79,6 +79,7 @@ namespace LAMMPS_NS
 			// Fast many-body evaluation (pair_style chimesFF fastmb)
 
 			bool                use_fastmb;             // Evaluate the 3- and 4-body terms through the chimesFF pair cache
+			bool                fastmb_simd;            // Sweep clusters of one type in SIMD batches (keyword nosimd: one at a time)
 
 			std::vector<int>    fastmb_pair_i;          // [pair idx] local index of the first atom of a registered pair (i < j)
 			std::vector<int>    fastmb_pair_j;          // [pair idx] local index of the second atom
@@ -86,6 +87,7 @@ namespace LAMMPS_NS
 			std::vector<double> fastmb_pair_dr;         // [pair idx*CHDIM + dim] distance components, atom j minus atom i
 			std::vector<int>    fastmb_3mer_pair_idx;   // [3mer idx*3 + slot] 2*pair idx, plus 1 if the slot runs from j to i
 			std::vector<int>    fastmb_4mer_pair_idx;   // [4mer idx*6 + slot]
+			std::vector<std::vector<int> > fastmb_batches; // [cluster key] clusters waiting for a full SIMD batch
 
 			void   build_fastmb_pair_registry();        // Assigns pair indices to the pairs of the many-body neighbor lists
 			void   compute_fastmb(int nbody);           // 3- or 4-body forces, energy and virial from the pair cache

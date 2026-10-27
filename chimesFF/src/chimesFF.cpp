@@ -3222,6 +3222,111 @@ namespace
         for (int m = 0; m < M; m++)
             deriv_by_column[m] = acc[1+m];
     }
+
+    // Lane-batched sweep: W clusters of one type walk the tree together, one per vector lane.
+    // Xs and Ds hold the cached polynomials lane-minor, Xs[(column*norder + power)*W + lane].
+    // out holds, for each lane, the subtree value and its derivatives with respect to levels
+    // K..M-1, as out[(1+j)*W + lane]. Leaves are folded into their parent at level M-2.
+
+    const int fastmb_W = chimesFF::fastmb_lanes;
+
+    template <int K, int M>
+    struct fastmb_lane_node
+    {
+        static inline void eval(const chimesFastMBTree<M> & tree, int n, const double *Xs, const double *Ds, int norder, double *out)
+        {
+            alignas(64) double acc[(M-K)*fastmb_W];
+
+            for (int i = 0; i < (M-K)*fastmb_W; i++)
+                acc[i] = 0.0;
+
+            children(tree, n, Xs, Ds, norder, acc, fastmb_flag<K == M-2>());
+
+            const int     p = tree.power[K][n];
+            const double *x = &Xs[(K*norder + p)*fastmb_W];
+            const double *d = &Ds[(K*norder + p)*fastmb_W];
+
+            #pragma omp simd
+            for (int w = 0; w < fastmb_W; w++)
+            {
+                out[w]          = x[w] * acc[w];
+                out[fastmb_W+w] = d[w] * acc[w];
+            }
+
+            for (int j = 1; j < M-K; j++)
+            {
+                #pragma omp simd
+                for (int w = 0; w < fastmb_W; w++)
+                    out[(1+j)*fastmb_W + w] = x[w] * acc[j*fastmb_W + w];
+            }
+        }
+
+        // The children are leaves: two multiply-adds per leaf and lane
+
+        static inline void children(const chimesFastMBTree<M> & tree, int n, const double *Xs, const double *Ds, int norder, double *acc, fastmb_flag<true>)
+        {
+            for (int c = tree.child[K][n]; c < tree.child[K][n+1]; c++)
+            {
+                const double  coeff = tree.coeff[c];
+                const int     p     = tree.power[M-1][c];
+                const double *x     = &Xs[((M-1)*norder + p)*fastmb_W];
+                const double *d     = &Ds[((M-1)*norder + p)*fastmb_W];
+
+                #pragma omp simd
+                for (int w = 0; w < fastmb_W; w++)
+                {
+                    acc[w]          += coeff * x[w];
+                    acc[fastmb_W+w] += coeff * d[w];
+                }
+            }
+        }
+
+        // The children are inner nodes
+
+        static inline void children(const chimesFastMBTree<M> & tree, int n, const double *Xs, const double *Ds, int norder, double *acc, fastmb_flag<false>)
+        {
+            for (int c = tree.child[K][n]; c < tree.child[K][n+1]; c++)
+            {
+                alignas(64) double o[(M-K)*fastmb_W];
+
+                fastmb_lane_node<(K < M-2 ? K+1 : K), M>::eval(tree, c, Xs, Ds, norder, o);
+
+                #pragma omp simd
+                for (int i = 0; i < (M-K)*fastmb_W; i++)
+                    acc[i] += o[i];
+            }
+        }
+    };
+
+    // Energies and derivatives (by column) of the clusters in the lanes
+
+    template <int M>
+    inline void fastmb_sweep_batch(const chimesFastMBTree<M> & tree, const double *Xs, const double *Ds, int norder, double *energy, double *deriv_by_column)
+    {
+        alignas(64) double root[(M+1)*fastmb_W];
+
+        for (int i = 0; i < (M+1)*fastmb_W; i++)
+            root[i] = 0.0;
+
+        for (int n = 0; n < tree.nroots; n++)
+        {
+            alignas(64) double o[(M+1)*fastmb_W];
+
+            fastmb_lane_node<0, M>::eval(tree, n, Xs, Ds, norder, o);
+
+            #pragma omp simd
+            for (int i = 0; i < (M+1)*fastmb_W; i++)
+                root[i] += o[i];
+        }
+
+        for (int w = 0; w < fastmb_W; w++)
+        {
+            energy[w] = root[w];
+
+            for (int m = 0; m < M; m++)
+                deriv_by_column[w*M + m] = root[(1+m)*fastmb_W + w];
+        }
+    }
 }
 
 string chimesFF::fastmb_init()
@@ -3235,6 +3340,9 @@ string chimesFF::fastmb_init()
 
     fastmb_variants_3b.order = (poly_orders.size() > 1) ? poly_orders[1] : 0;
     fastmb_variants_4b.order = (poly_orders.size() > 2) ? poly_orders[2] : 0;
+
+    if ((fastmb_variants_3b.order > fastmb_max_order) || (fastmb_variants_4b.order > fastmb_max_order))
+        return "3- or 4-body polynomial order above " + to_string(fastmb_max_order);
 
     fastmb_trees_3b.clear();
     fastmb_trees_4b.clear();
@@ -3469,6 +3577,60 @@ bool chimesFF::fastmb_compute_cluster(int nbody, int key, const int *pair_idxs, 
         deriv[s] = deriv_by_column[mapped_pair_idx[s]];
 
     return true;
+}
+
+void chimesFF::fastmb_compute_batch(int nbody, int key, const int *pair_idxs, int nclusters, double *energy, double *deriv)
+{
+    // Energies and distance derivatives of up to fastmb_lanes clusters of one type, which share one
+    // sweep of the coefficient tree. All clusters must be active (see fastmb_cluster_active). Lanes
+    // beyond nclusters repeat the last cluster and their results are discarded.
+
+    const int npairs  = (nbody == 3) ? 3 : 6;
+    int       clu_idx = (nbody == 3) ? atom_int_trip_map[key] : atom_int_quad_map[key];
+
+    const chimesFastMBCache    & cache           = (nbody == 3) ? fastmb_cache_3b    : fastmb_cache_4b;
+    const chimesFastMBVariants & variants        = (nbody == 3) ? fastmb_variants_3b : fastmb_variants_4b;
+    const vector<int>          & slot_variant    = variants.slot_variant[key];
+    const vector<int>          & mapped_pair_idx = (nbody == 3) ? pair_int_trip_map[key] : pair_int_quad_map[key];
+    const int                    norder          = variants.order + 1;
+
+    // Gather the cached polynomials into the lanes: Xs[(column*norder + power)*lanes + lane]
+
+    alignas(64) double Xs[6*(fastmb_max_order+1)*fastmb_lanes];
+    alignas(64) double Ds[6*(fastmb_max_order+1)*fastmb_lanes];
+
+    for (int w = 0; w < fastmb_lanes; w++)
+    {
+        const int *cluster_pair_idxs = &pair_idxs[npairs * ((w < nclusters) ? w : nclusters-1)];
+
+        for (int s = 0; s < npairs; s++)
+        {
+            const double *entry  = &cache.data[cache.offset[(size_t)cluster_pair_idxs[s]*cache.nvariants + slot_variant[s]]];
+            const int     column = mapped_pair_idx[s];
+
+            for (int p = 0; p < norder; p++)
+            {
+                Xs[(column*norder + p)*fastmb_lanes + w] = entry[p];
+                Ds[(column*norder + p)*fastmb_lanes + w] = entry[norder + p];
+            }
+        }
+    }
+
+    double lane_energy[fastmb_lanes];
+    double deriv_by_column[6*fastmb_lanes];
+
+    if (nbody == 3)
+        fastmb_sweep_batch<3>(fastmb_trees_3b[clu_idx], Xs, Ds, norder, lane_energy, deriv_by_column);
+    else
+        fastmb_sweep_batch<6>(fastmb_trees_4b[clu_idx], Xs, Ds, norder, lane_energy, deriv_by_column);
+
+    for (int w = 0; w < nclusters; w++)
+    {
+        energy[w] = lane_energy[w];
+
+        for (int s = 0; s < npairs; s++)
+            deriv[w*npairs + s] = deriv_by_column[w*npairs + mapped_pair_idx[s]];
+    }
 }
 
 #endif
