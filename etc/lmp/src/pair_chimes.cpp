@@ -80,6 +80,7 @@ PairCHIMES::PairCHIMES(LAMMPS *lmp) : Pair(lmp)
     fastmb_simd = true;
     fastmb_rips = true;
     fastmb_hash_ownership = true;
+    fastmb_4b_reuse = true;
     fastmb_warned_self_image = false;
     fastmb_timing = getenv("CHIMES_TIMING") && (atoi(getenv("CHIMES_TIMING")) > 0);
     fastmb_time_neighlist = fastmb_time_registry = fastmb_time_cache = 0.0;
@@ -143,9 +144,10 @@ void PairCHIMES::settings(int narg, char **arg)
 #ifdef FASTMB
 	// The keyword fastmb, anywhere in the argument list, selects the fast many-body evaluation.
 	// For testing, nosimd evaluates clusters one at a time instead of in SIMD batches, norips
-	// builds the cluster lists with the nested loops of build_mb_neighlists, and orient tag
-	// assigns each cluster to its lowest-tag atom (the default rule) instead of to its atom with
-	// the lowest hashed tag. The remaining arguments are handled as before.
+	// builds the cluster lists with the nested loops of build_mb_neighlists, orient tag assigns
+	// each cluster to its lowest-tag atom (the default rule) instead of to its atom with the lowest
+	// hashed tag, and nok4 evaluates the 4-body term by the SIMD tree sweep instead of by
+	// hierarchical reuse across clusters. The remaining arguments are handled as before.
 
 	std::vector<char *> other_args;
 
@@ -157,6 +159,8 @@ void PairCHIMES::settings(int narg, char **arg)
 			fastmb_simd = false;
 		else if (utils::strmatch(arg[a], "^norips$"))
 			fastmb_rips = false;
+		else if (utils::strmatch(arg[a], "^nok4$"))
+			fastmb_4b_reuse = false;
 		else if (utils::strmatch(arg[a], "^orient$"))
 		{
 			if (a + 1 >= narg)
@@ -326,10 +330,25 @@ void PairCHIMES::coeff(int narg, char **arg)
 		if (!why.empty())
 			error -> all(FLERR, "pair_style chimesFF fastmb: " + why);
 
+		if (fastmb_4b_reuse && (chimes_calculator.poly_orders[2] > 0))
+		{
+			std::string why_4b = chimes_calculator.fastmb_init_4B_reuse();
+
+			if (!why_4b.empty())
+			{
+				if (comm->me == 0)
+					std::cout << "chimesFF: fastmb 4-body term by the tree sweep (" << why_4b << ")" << std::endl;
+				fastmb_4b_reuse = false;
+			}
+		}
+		else
+			fastmb_4b_reuse = false;
+
 		if (comm->me == 0)
 			std::cout << "chimesFF: fastmb many-body evaluation enabled; SIMD batches " << (fastmb_simd ? "on" : "off")
 			          << ", bitset cluster lists " << (fastmb_rips ? "on" : "off")
-			          << ", cluster ownership by " << (fastmb_hash_ownership ? "hashed tag" : "tag") << std::endl;
+			          << ", cluster ownership by " << (fastmb_hash_ownership ? "hashed tag" : "tag")
+			          << ", 4-body by " << (fastmb_4b_reuse ? "hierarchical reuse" : "tree sweep") << std::endl;
 	}
 #endif
 }
@@ -837,7 +856,15 @@ void PairCHIMES::compute(int eflag, int vflag)
 		double time_4b = MPI_Wtime();
 
 		if (chimes_calculator.poly_orders[2] > 0)
-			compute_fastmb(4);
+		{
+			// Per-atom energy or virial tallies need per-cluster values, which the hierarchical
+			// kernel does not produce; those steps use the tree sweep
+
+			if (fastmb_4b_reuse && !(evflag && (eflag_atom || vflag_atom)))
+				compute_fastmb_4B_reuse();
+			else
+				compute_fastmb(4);
+		}
 
 		fastmb_time_cache += time_3b - time_cache;
 		fastmb_time_3b    += time_4b - time_3b;
@@ -1075,6 +1102,10 @@ void PairCHIMES::report_fastmb_instrumentation()
 			         + (fastmb_pair_r.capacity() + fastmb_pair_dr.capacity()) * sizeof(double)),
 			(double)cache_bytes, batch_bytes, (double)tree_bytes, 0.0 };
 
+		if (fastmb_4b_reuse)
+			local[5] += (double)chimes_calculator.fastmb_4B_reuse_bytes()
+			          + (double)(fastmb_pair_deriv.capacity() * sizeof(double) + (fastmb_4b_atoms.capacity() + fastmb_4b_pair_idxs.capacity()) * sizeof(int));
+
 		if (FILE *fp = fopen("/proc/self/status", "r"))
 		{
 			char line[256];
@@ -1100,7 +1131,7 @@ void PairCHIMES::report_fastmb_instrumentation()
 
 		if (comm->me == 0)
 		{
-			const char *names[8] = {"list_3mers", "list_4mers", "slot_pair_ids", "pair_registry", "pair_cache", "batches", "trees", "vm_hwm"};
+			const char *names[8] = {"list_3mers", "list_4mers", "slot_pair_ids", "pair_registry", "pair_cache", "batches_k4", "trees", "vm_hwm"};
 
 			for (int k = 0; k < 8; k++)
 				printf("CHIMES_MEMORY %-14s min %14.0f  mean %14.0f  max %14.0f bytes\n", names[k], minima[k], sums[k]/comm->nprocs, maxima[k]);
@@ -1108,6 +1139,20 @@ void PairCHIMES::report_fastmb_instrumentation()
 			printf("CHIMES_MEMORY counts 3mers total %lld max %lld  4mers total %lld max %lld  pairs total %lld max %lld\n",
 			       count_sums[0], count_maxima[0], count_sums[1], count_maxima[1], count_sums[2], count_maxima[2]);
 		}
+	}
+
+	if (fastmb_timing && use_fastmb && fastmb_4b_reuse)
+	{
+		// Reuse counts of the hierarchical 4-body kernel, summed over ranks
+
+		long long local[3], sums[3];
+
+		chimes_calculator.fastmb_4B_reuse_counts(local);
+
+		MPI_Allreduce(local, sums, 3, MPI_LONG_LONG, MPI_SUM, world);
+
+		if (comm->me == 0)
+			printf("CHIMES_K4 (i,j) runs %lld  triangles %lld  tetrahedra %lld\n", sums[0], sums[1], sums[2]);
 	}
 }
 
@@ -1602,6 +1647,122 @@ void PairCHIMES::compute_fastmb(int nbody)
 			stensor[k] = stress_sum[k];
 
 		ev_tally_mb(nbody, npairs, atmidxlst, energy_sum, stensor);
+	}
+}
+
+void PairCHIMES::compute_fastmb_4B_reuse()
+{
+	// 4-body forces, energy and virial by hierarchical reuse (chimesFF::fastmb_compute_4B_reuse).
+	// Active clusters are grouped by type key in list order, so the (i,j) and (i,j,k) runs of each
+	// key stay contiguous; dE/dr is accumulated per pair and turned into forces and virial once per
+	// pair. Only global energy and virial tallies are made; see compute() for the per-atom case.
+
+	static const int slot_atoms_4b[6][2] = {{0,1},{0,2},{0,3},{1,2},{1,3},{2,3}};
+
+	double **f    = atom->f;
+	int     *type = atom->type;
+
+	const int npairs_registered = fastmb_pair_i.size();
+	const int nkeys             = chimes_calculator.fastmb_ncluster_keys(4);
+
+	fastmb_pair_deriv.assign(npairs_registered, 0.0);
+
+	if (fastmb_batches.size() < nkeys)
+		fastmb_batches.resize(nkeys);
+
+	for (int k = 0; k < nkeys; k++)
+		fastmb_batches[k].clear();
+
+	int typ_idxs[4];
+	int pair_idxs[6];
+
+	for (int c = 0; c < neighborlist_4mers.size(); c++)
+	{
+		const int *atoms = neighborlist_4mers[c].data();
+
+		for (int a = 0; a < 4; a++)
+			typ_idxs[a] = chimes_type[type[atoms[a]]-1];
+
+		for (int s = 0; s < 6; s++)
+			pair_idxs[s] = fastmb_4mer_pair_idx[6*c + s] >> 1;
+
+		int key = chimes_calculator.fastmb_cluster_key(4, typ_idxs);
+
+		if (chimes_calculator.fastmb_cluster_active(4, key, pair_idxs))
+			fastmb_batches[key].push_back(c);
+	}
+
+	double energy = 0.0;
+
+	for (int key = 0; key < nkeys; key++)
+	{
+		const std::vector<int> & clusters  = fastmb_batches[key];
+		const int                nclusters = clusters.size();
+
+		if (nclusters == 0)
+			continue;
+
+		fastmb_4b_atoms    .resize(4*nclusters);
+		fastmb_4b_pair_idxs.resize(6*nclusters);
+
+		for (int w = 0; w < nclusters; w++)
+		{
+			const int *atoms = neighborlist_4mers[clusters[w]].data();
+
+			for (int a = 0; a < 4; a++)
+				fastmb_4b_atoms[4*w + a] = atoms[a];
+
+			for (int s = 0; s < 6; s++)
+				fastmb_4b_pair_idxs[6*w + s] = fastmb_4mer_pair_idx[6*clusters[w] + s] >> 1;
+		}
+
+		chimes_calculator.fastmb_compute_4B_reuse(key, nclusters, fastmb_4b_atoms.data(), fastmb_4b_pair_idxs.data(), fastmb_pair_deriv.data(), energy);
+	}
+
+	// Forces and virial, once per pair, from the accumulated dE/dr
+
+	double stress[6] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+
+	for (int p = 0; p < npairs_registered; p++)
+	{
+		double deriv = fastmb_pair_deriv[p];
+
+		if (deriv == 0.0)
+			continue;
+
+		int     i       = fastmb_pair_i[p];
+		int     j       = fastmb_pair_j[p];
+		double *dr      = &fastmb_pair_dr[CHDIM*p];
+		double  fscalar = deriv / fastmb_pair_r[p];
+
+		for (int idx = 0; idx < CHDIM; idx++)
+		{
+			f[i][idx] += fscalar * dr[idx];
+			f[j][idx] -= fscalar * dr[idx];
+		}
+
+		stress[0] -= fscalar * dr[0] * dr[0];	// xx tensor component
+		stress[1] -= fscalar * dr[0] * dr[1];	// xy tensor component
+		stress[2] -= fscalar * dr[0] * dr[2];	// xz tensor component
+		stress[3] -= fscalar * dr[1] * dr[1];	// yy tensor component
+		stress[4] -= fscalar * dr[1] * dr[2];	// yz tensor component
+		stress[5] -= fscalar * dr[2] * dr[2];	// zz tensor component
+	}
+
+	if (evflag && !neighborlist_4mers.empty())
+	{
+		int        atmidxlst[6][2];
+		const int *atoms = neighborlist_4mers[0].data();
+
+		for (int s = 0; s < 6; s++)
+		{
+			atmidxlst[s][0] = atoms[slot_atoms_4b[s][0]];
+			atmidxlst[s][1] = atoms[slot_atoms_4b[s][1]];
+		}
+
+		std::vector<double> stensor(stress, stress + 6);
+
+		ev_tally_mb(4, 6, atmidxlst, energy, stensor);
 	}
 }
 

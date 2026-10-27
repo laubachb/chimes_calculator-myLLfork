@@ -18,6 +18,9 @@
 #include<algorithm>
 #include<cmath>
 #include<map>
+#ifdef FASTMB
+#include<cstdint>
+#endif
 
 #define pi 3.14159265359
 
@@ -199,6 +202,38 @@ inline chimesFastMBTree<M>::chimesFastMBTree() : nroots(0)
     ;
 }
 
+// A 64-byte aligned array of doubles for the vector loops of the hierarchical 4-body kernel
+// (heap allocations are only guaranteed 16-byte alignment).
+
+class chimesFastMBAlignedBuffer
+{
+public:
+    inline chimesFastMBAlignedBuffer() ;
+    inline void   alloc(size_t n) ;     // Allocates and zeroes n doubles
+    inline size_t bytes() const ;
+
+    double *p;                          // Aligned start
+
+private:
+    vector<double> storage;
+} ;
+
+inline chimesFastMBAlignedBuffer::chimesFastMBAlignedBuffer() : p(nullptr)
+{
+    ;
+}
+
+inline void chimesFastMBAlignedBuffer::alloc(size_t n)
+{
+    storage.assign(n + 8, 0.0);
+    p = (double *)(((uintptr_t)storage.data() + 63) & ~(uintptr_t)63);
+}
+
+inline size_t chimesFastMBAlignedBuffer::bytes() const
+{
+    return storage.capacity() * sizeof(double);
+}
+
 #endif
 
 enum class fcutType
@@ -337,6 +372,19 @@ public:
     bool   fastmb_compute_cluster(int nbody, int key, const int *pair_idxs, double & energy, double *deriv); // Energy and dE/dr per slot of one cluster; returns false if the cluster is inactive
     void   fastmb_compute_batch(int nbody, int key, const int *pair_idxs, int nclusters, double *energy, double *deriv); // Same for up to fastmb_lanes active clusters of one key, swept together; pair_idxs[c*npairs + slot], energy[c], deriv[c*npairs + slot]
     void   fastmb_memory(size_t & cache_bytes, size_t & tree_bytes);        // Bytes held by the pair caches and by the coefficient trees (for reporting)
+
+    // Hierarchical reuse for the 4-body term. The cluster list of one type is a prefix tree:
+    // owner atom i, its pairs (i,j), the triangles (i,j,k) on each pair, the tetrahedra (i,j,k,l)
+    // on each triangle. With the coefficient tensor held densely in face-first slot order
+    // [ij ik jk | il jl kl], the ij mode is contracted once per (i,j) run, the ik and jk modes once
+    // per triangle, and only the three l-side modes per tetrahedron; derivatives return up the same
+    // tree. Runs are found from consecutive clusters with equal (i,j) and (i,j,k), so any list
+    // order is correct; the bitset enumeration produces maximal runs.
+
+    string fastmb_init_4B_reuse();                                          // Builds the dense tensors; returns "" or why the 4-body term cannot use hierarchical reuse
+    void   fastmb_compute_4B_reuse(int key, int nclusters, const int *atoms, const int *pair_idxs, double *pair_deriv, double & energy); // nclusters active clusters of one key in list order (atoms[4c+a], pair_idxs[6c+s]); adds the energy and dE/dr of every pair to pair_deriv[pair idx]
+    size_t fastmb_4B_reuse_bytes();                                         // Bytes held by the dense tensors and scratch (for reporting)
+    void   fastmb_4B_reuse_counts(long long counts[3]);                     // (i,j) runs, triangles and tetrahedra processed so far (for reporting)
 #endif
 
 private:
@@ -430,7 +478,20 @@ private:
     vector<double>       fastmb_Tn;            // Scratch for set_cheby_polys
     vector<double>       fastmb_Tnd;
 
+    // Hierarchical reuse for the 4-body term
+
+    int                            fastmb_4b_nbasis;        // Basis functions per slot held densely (largest 4-body power + 1), 0 if not in use
+    vector<chimesFastMBAlignedBuffer> fastmb_4b_dense;      // [cluster key] dense coefficient tensor in face-first slot order
+    chimesFastMBAlignedBuffer      fastmb_4b_T1;            // Scratch: tensor contracted over the ij mode
+    chimesFastMBAlignedBuffer      fastmb_4b_W2;            // Scratch: adjoint accumulated over a (i,j) run
+    chimesFastMBAlignedBuffer      fastmb_4b_T2;            // Scratch: contracted over ij and ik
+    chimesFastMBAlignedBuffer      fastmb_4b_R;             // Scratch: contracted over the face
+    chimesFastMBAlignedBuffer      fastmb_4b_W;             // Scratch: adjoint accumulated over a triangle
+    chimesFastMBAlignedBuffer      fastmb_4b_V;             // Scratch: triangle gradient
+    long long                      fastmb_4b_counts[3];     // (i,j) runs, triangles, tetrahedra processed
+
     void fastmb_init_variants(int nbody, chimesFastMBVariants & variants);
+    template <int NA> void fastmb_4B_reuse_run(int key, int nclusters, const int *atoms, const int *pair_idxs, double *pair_deriv, double & energy);
     void fastmb_fill_cache_one(chimesFastMBCache & cache, const chimesFastMBVariants & variants, int pair_idx, int pair_typ, double dx);
 #endif
 

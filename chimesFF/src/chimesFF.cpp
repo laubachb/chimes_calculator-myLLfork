@@ -3368,6 +3368,10 @@ string chimesFF::fastmb_init()
     fastmb_Tn .assign(max_order+1, 0.0);
     fastmb_Tnd.assign(max_order+1, 0.0);
 
+    fastmb_4b_nbasis = 0;
+    fastmb_4b_dense.clear();
+    fastmb_4b_counts[0] = fastmb_4b_counts[1] = fastmb_4b_counts[2] = 0;
+
     return "";
 }
 
@@ -3577,6 +3581,345 @@ bool chimesFF::fastmb_compute_cluster(int nbody, int key, const int *pair_idxs, 
         deriv[s] = deriv_by_column[mapped_pair_idx[s]];
 
     return true;
+}
+
+string chimesFF::fastmb_init_4B_reuse()
+{
+    // Hold the 4-body coefficient tensor of every cluster type densely, in the face-first slot
+    // order [ij ik jk | il jl kl], and allocate the scratch of the hierarchical kernel. Returns an
+    // empty string on success, otherwise why the 4-body term keeps the tree sweep.
+
+    fastmb_4b_nbasis = 0;
+    fastmb_4b_dense.clear();
+
+    if (fastmb_variants_4b.order <= 0)
+        return "no 4-body term";
+
+    for (int q = 0; q < chimes_4b_params.size(); q++)
+        for (int c = 0; c < ncoeffs_4b[q]; c++)
+            for (int m = 0; m < 6; m++)
+                fastmb_4b_nbasis = max(fastmb_4b_nbasis, chimes_4b_powers[q][c][m] + 1);
+
+    if ((fastmb_4b_nbasis < 2) || (fastmb_4b_nbasis > 8))
+        return "4-body powers outside 1..7";
+
+    static const int face_first[6] = {0, 1, 3, 2, 4, 5};    // Slot order ij ik jk il jl kl in terms of ij ik il jk jl kl
+
+    const int    nkeys = fastmb_ncluster_keys(4);
+    const int    nbasis = fastmb_4b_nbasis;
+    const size_t n6 = (size_t)nbasis*nbasis*nbasis*nbasis*nbasis*nbasis;
+
+    fastmb_4b_dense.resize(nkeys);
+
+    for (int key = 0; key < nkeys; key++)
+    {
+        int quad_idx = atom_int_quad_map[key];
+
+        if (quad_idx < 0)
+            continue;
+
+        const vector<int> & mapped_pair_idx = pair_int_quad_map[key];
+        chimesFastMBAlignedBuffer & dense = fastmb_4b_dense[key];
+
+        dense.alloc(n6);
+
+        for (int c = 0; c < ncoeffs_4b[quad_idx]; c++)
+        {
+            size_t linear = 0;
+
+            for (int k = 0; k < 6; k++)
+                linear = linear*nbasis + chimes_4b_powers[quad_idx][c][mapped_pair_idx[face_first[k]]];
+
+            dense.p[linear] += chimes_4b_params[quad_idx][c];
+        }
+    }
+
+    fastmb_4b_T1.alloc(n6/nbasis);
+    fastmb_4b_W2.alloc(n6/nbasis);
+    fastmb_4b_T2.alloc(n6/nbasis/nbasis);
+    fastmb_4b_R .alloc((size_t)nbasis*nbasis*nbasis);
+    fastmb_4b_W .alloc((size_t)nbasis*nbasis*nbasis);
+    fastmb_4b_V .alloc((size_t)nbasis*nbasis);
+
+    return "";
+}
+
+size_t chimesFF::fastmb_4B_reuse_bytes()
+{
+    size_t bytes = 0;
+
+    for (int key = 0; key < fastmb_4b_dense.size(); key++)
+        bytes += fastmb_4b_dense[key].bytes();
+
+    bytes += fastmb_4b_T1.bytes() + fastmb_4b_W2.bytes() + fastmb_4b_T2.bytes()
+           + fastmb_4b_R.bytes()  + fastmb_4b_W.bytes()  + fastmb_4b_V.bytes();
+
+    return bytes;
+}
+
+void chimesFF::fastmb_4B_reuse_counts(long long counts[3])
+{
+    for (int k = 0; k < 3; k++)
+        counts[k] = fastmb_4b_counts[k];
+}
+
+void chimesFF::fastmb_compute_4B_reuse(int key, int nclusters, const int *atoms, const int *pair_idxs, double *pair_deriv, double & energy)
+{
+    switch (fastmb_4b_nbasis)
+    {
+        case 2:  fastmb_4B_reuse_run<2>(key, nclusters, atoms, pair_idxs, pair_deriv, energy); break;
+        case 3:  fastmb_4B_reuse_run<3>(key, nclusters, atoms, pair_idxs, pair_deriv, energy); break;
+        case 4:  fastmb_4B_reuse_run<4>(key, nclusters, atoms, pair_idxs, pair_deriv, energy); break;
+        case 5:  fastmb_4B_reuse_run<5>(key, nclusters, atoms, pair_idxs, pair_deriv, energy); break;
+        case 6:  fastmb_4B_reuse_run<6>(key, nclusters, atoms, pair_idxs, pair_deriv, energy); break;
+        case 7:  fastmb_4B_reuse_run<7>(key, nclusters, atoms, pair_idxs, pair_deriv, energy); break;
+        default: fastmb_4B_reuse_run<8>(key, nclusters, atoms, pair_idxs, pair_deriv, energy); break;
+    }
+}
+
+template <int NA>
+void chimesFF::fastmb_4B_reuse_run(int key, int nclusters, const int *atoms, const int *pair_idxs, double *pair_deriv, double & energy)
+{
+    // NA = basis functions per slot. Slots of pair_idxs: 0 ij, 1 ik, 2 il, 3 jk, 4 jl, 5 kl; the
+    // dense tensor is indexed [ij][ik][jk][il][jl][kl].
+
+    constexpr int N2 = NA*NA, N3 = N2*NA, N4 = N3*NA, N5 = N4*NA;
+
+    const chimesFastMBCache & cache  = fastmb_cache_4b;
+    const int                 norder = fastmb_variants_4b.order + 1;
+    const vector<int>       & slot_variant = fastmb_variants_4b.slot_variant[key];
+
+    const double *__restrict dense = fastmb_4b_dense[key].p;
+    double *__restrict T1 = fastmb_4b_T1.p;
+    double *__restrict W2 = fastmb_4b_W2.p;
+    double *__restrict T2 = fastmb_4b_T2.p;
+    double *__restrict R  = fastmb_4b_R.p;
+    double *__restrict W  = fastmb_4b_W.p;
+    double *__restrict V  = fastmb_4b_V.p;
+
+    // Cached polynomials of the pair in slot s: X_0..X_order followed by D_0..D_order
+
+    auto X = [&](int pair_idx, int s) -> const double *
+    {
+        return &cache.data[cache.offset[(size_t)pair_idx*cache.nvariants + slot_variant[s]]];
+    };
+
+    double energy_sum = 0.0;
+    int    run_begin  = 0;
+
+    while (run_begin < nclusters)
+    {
+        // A run of clusters with the same (i,j): contract the ij mode once
+
+        int run_end = run_begin + 1;
+
+        while ((run_end < nclusters) && (atoms[4*run_end] == atoms[4*run_begin]) && (atoms[4*run_end+1] == atoms[4*run_begin+1]))
+            run_end++;
+
+        fastmb_4b_counts[0]++;
+
+        const int    *run_pairs = pair_idxs + 6*run_begin;
+        const double *x_ij      = X(run_pairs[0], 0);
+
+        for (int i = 0; i < N5; i++)
+        {
+            T1[i] = 0.0;
+            W2[i] = 0.0;
+        }
+
+        for (int a = 0; a < NA; a++)
+        {
+            const double            xa     = x_ij[a];
+            const double *__restrict dense_a = dense + (size_t)a*N5;
+
+            #pragma omp simd
+            for (int i = 0; i < N5; i++)
+                T1[i] += xa * dense_a[i];
+        }
+
+        int face_begin = run_begin;
+
+        while (face_begin < run_end)
+        {
+            // A triangle (i,j,k) shared by consecutive tetrahedra: contract the ik and jk modes once
+
+            int face_end = face_begin + 1;
+
+            while ((face_end < run_end) && (atoms[4*face_end+2] == atoms[4*face_begin+2]))
+                face_end++;
+
+            fastmb_4b_counts[1]++;
+            fastmb_4b_counts[2] += face_end - face_begin;
+
+            const int    *face_pairs = pair_idxs + 6*face_begin;
+            const double *x_ik       = X(face_pairs[1], 1);
+            const double *x_jk       = X(face_pairs[3], 3);
+
+            for (int i = 0; i < N4; i++)
+                T2[i] = 0.0;
+
+            for (int b = 0; b < NA; b++)
+            {
+                const double            xb   = x_ik[b];
+                const double *__restrict T1_b = T1 + b*N4;
+
+                #pragma omp simd
+                for (int i = 0; i < N4; i++)
+                    T2[i] += xb * T1_b[i];
+            }
+
+            for (int i = 0; i < N3; i++)
+            {
+                R[i] = 0.0;
+                W[i] = 0.0;
+            }
+
+            for (int c = 0; c < NA; c++)
+            {
+                const double            xc   = x_jk[c];
+                const double *__restrict T2_c = T2 + c*N3;
+
+                #pragma omp simd
+                for (int i = 0; i < N3; i++)
+                    R[i] += xc * T2_c[i];
+            }
+
+            // Each tetrahedron on the face: the three l-side modes
+
+            for (int q = face_begin; q < face_end; q++)
+            {
+                const int    *pairs = pair_idxs + 6*q;
+                const double *x_il  = X(pairs[2], 2), *d_il = x_il + norder;
+                const double *x_jl  = X(pairs[4], 4), *d_jl = x_jl + norder;
+                const double *x_kl  = X(pairs[5], 5), *d_kl = x_kl + norder;
+
+                alignas(64) double S[N2], Sd[N2], W_ef[N2];
+
+                for (int ef = 0; ef < N2; ef++)
+                {
+                    S[ef]  = 0.0;
+                    Sd[ef] = 0.0;
+                }
+
+                for (int d = 0; d < NA; d++)
+                {
+                    const double *__restrict R_d = R + d*N2;
+                    const double x = x_il[d], dx = d_il[d];
+
+                    #pragma omp simd
+                    for (int ef = 0; ef < N2; ef++)
+                    {
+                        S[ef]  += x  * R_d[ef];
+                        Sd[ef] += dx * R_d[ef];
+                    }
+                }
+
+                double e = 0.0, G_il = 0.0, G_jl = 0.0, G_kl = 0.0;
+
+                for (int ee = 0; ee < NA; ee++)
+                {
+                    double sf = 0.0, sdf = 0.0, sfd = 0.0;
+
+                    for (int f = 0; f < NA; f++)
+                    {
+                        sf  += S[ee*NA+f]  * x_kl[f];
+                        sdf += S[ee*NA+f]  * d_kl[f];
+                        sfd += Sd[ee*NA+f] * x_kl[f];
+
+                        W_ef[ee*NA+f] = x_jl[ee] * x_kl[f];
+                    }
+
+                    e    += x_jl[ee] * sf;
+                    G_jl += d_jl[ee] * sf;
+                    G_kl += x_jl[ee] * sdf;
+                    G_il += x_jl[ee] * sfd;
+                }
+
+                for (int d = 0; d < NA; d++)
+                {
+                    const double x = x_il[d];
+                    double *__restrict W_d = W + d*N2;
+
+                    #pragma omp simd
+                    for (int ef = 0; ef < N2; ef++)
+                        W_d[ef] += x * W_ef[ef];
+                }
+
+                energy_sum += e;
+
+                pair_deriv[pairs[2]] += G_il;
+                pair_deriv[pairs[4]] += G_jl;
+                pair_deriv[pairs[5]] += G_kl;
+            }
+
+            // Triangle derivatives (ik, jk): V[bc] = sum_def T1[bc def] W[def]
+
+            for (int bc = 0; bc < N2; bc++)
+            {
+                const double *__restrict T1_bc = T1 + bc*N3;
+                double acc = 0.0;
+
+                #pragma omp simd reduction(+:acc)
+                for (int i = 0; i < N3; i++)
+                    acc += T1_bc[i] * W[i];
+
+                V[bc] = acc;
+            }
+
+            double G_ik = 0.0, G_jk = 0.0;
+
+            for (int b = 0; b < NA; b++)
+            {
+                for (int c = 0; c < NA; c++)
+                {
+                    G_ik += V[b*NA+c] * x_ik[norder+b] * x_jk[c];
+                    G_jk += V[b*NA+c] * x_ik[b]        * x_jk[norder+c];
+                }
+            }
+
+            pair_deriv[face_pairs[1]] += G_ik;
+            pair_deriv[face_pairs[3]] += G_jk;
+
+            // Pair adjoint: W2[bc def] += x_ik[b] x_jk[c] W[def]
+
+            for (int b = 0; b < NA; b++)
+            {
+                for (int c = 0; c < NA; c++)
+                {
+                    const double x_bc = x_ik[b] * x_jk[c];
+                    double *__restrict W2_bc = W2 + (b*NA+c)*N3;
+
+                    #pragma omp simd
+                    for (int i = 0; i < N3; i++)
+                        W2_bc[i] += x_bc * W[i];
+                }
+            }
+
+            face_begin = face_end;
+        }
+
+        // Pair derivative (ij) from the full adjoint of the run
+
+        double G_ij = 0.0;
+
+        for (int a = 0; a < NA; a++)
+        {
+            const double *__restrict dense_a = dense + (size_t)a*N5;
+            double acc = 0.0;
+
+            #pragma omp simd reduction(+:acc)
+            for (int i = 0; i < N5; i++)
+                acc += dense_a[i] * W2[i];
+
+            G_ij += x_ij[norder+a] * acc;
+        }
+
+        pair_deriv[run_pairs[0]] += G_ij;
+
+        run_begin = run_end;
+    }
+
+    energy += energy_sum;
 }
 
 void chimesFF::fastmb_memory(size_t & cache_bytes, size_t & tree_bytes)

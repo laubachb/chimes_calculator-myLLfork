@@ -82,6 +82,7 @@ namespace LAMMPS_NS
 			bool                fastmb_simd;            // Sweep clusters of one type in SIMD batches (keyword nosimd: one at a time)
 			bool                fastmb_rips;            // Build cluster lists by bitset intersection (keyword norips: the nested loops of build_mb_neighlists)
 			bool                fastmb_hash_ownership;  // A cluster is owned by its atom with the smallest hashed tag (keyword orient tag: smallest tag)
+			bool                fastmb_4b_reuse;        // 4-body term by hierarchical reuse across clusters (keyword nok4: the SIMD tree sweep)
 			bool                fastmb_warned_self_image; // The fall-back to build_mb_neighlists has been reported once
 
 			std::vector<int>    fastmb_pair_i;          // [pair idx] local index of the first atom of a registered pair (i < j)
@@ -93,6 +94,9 @@ namespace LAMMPS_NS
 			std::vector<long long> fastmb_registry_keys; // Open-addressing hash table of the registered pairs: pair key, -1 if empty
 			std::vector<int>       fastmb_registry_vals; // Pair index of the pair stored in the same table slot
 			std::vector<std::vector<int> > fastmb_batches; // [cluster key] clusters waiting for a full SIMD batch
+			std::vector<double> fastmb_pair_deriv;      // [pair idx] dE/dr accumulated by the hierarchical 4-body kernel
+			std::vector<int>    fastmb_4b_atoms;        // [cluster*4 + a] atoms of the active clusters of one key, list order
+			std::vector<int>    fastmb_4b_pair_idxs;    // [cluster*6 + slot] their slot pair indices
 
 			// Benchmark instrumentation, printed at exit: phase timers (env CHIMES_TIMING=1) and the
 			// memory held by the many-body data structures (env CHIMES_MEMORY=1)
@@ -109,6 +113,7 @@ namespace LAMMPS_NS
 			bool   build_fastmb_neighlists();           // Cluster lists by bitset intersection; false if the box is too small (caller then uses build_mb_neighlists on every rank)
 			void   build_fastmb_pair_registry();        // Assigns pair indices to the pairs of the many-body neighbor lists
 			void   compute_fastmb(int nbody);           // 3- or 4-body forces, energy and virial from the pair cache
+			void   compute_fastmb_4B_reuse();           // 4-body forces, energy and virial by hierarchical reuse
 #endif
             bool     fingerprint;
 			int IO_freq;
