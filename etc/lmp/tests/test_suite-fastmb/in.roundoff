@@ -1,0 +1,25 @@
+########################################
+# Single-point energy, forces and virial with the default many-body evaluation or with fastmb.
+# Used by roundoff_check.sh; variables: style, data, param_file, rep, tag
+########################################
+
+units           real                          # Required for CHIMES pair style
+newton          on                            # Required for CHIMES pair style
+atom_style      atomic                        # Required for CHIMES pair style
+atom_modify     sort 0 0.0                    # Required for CHIMES pair style
+atom_modify     map array                     # Required for CHIMES pair style
+
+neighbor        1.0 bin
+neigh_modify    delay 0 every 1 check yes     # Required for CHIMES pair style
+
+read_data       ${data}
+replicate       ${rep} ${rep} ${rep}
+
+pair_style      ${style}
+pair_coeff      * * ${param_file}
+
+thermo_style    custom step atoms pe press pxx pyy pzz pxy pxz pyz
+thermo_modify   format float %24.16g
+dump            d all custom 1 forces_${tag}.dump id type fx fy fz
+dump_modify     d sort id format float %24.16g
+run             0

@@ -1,0 +1,40 @@
+########################################
+# GENERAL CONTROLS
+########################################
+#
+# Test of the fast many-body evaluation (pair_style chimesFF fastmb; requires ./install.sh FASTMB).
+# 20 NVE steps of liquid carbon with the Carbon-2.0 Small 2+3+4-body model. The expected output was
+# generated with the default evaluation (pair_style chimesFF) by create.sh, so this test checks that
+# fastmb reproduces the default energies, pressures and dynamics. For a check at the level of
+# floating-point roundoff (energy, virial and every force component, each fastmb option, a
+# two-element model and a small periodic box) run ./roundoff_check.sh in this directory.
+
+units           real                          # Required for CHIMES pair style
+newton          on                            # Required for CHIMES pair style
+atom_style      atomic                        # Required for CHIMES pair style
+atom_modify     sort 0 0.0                    # Prevent sorting (to maintain 3b parent/neighbor relationships)
+atom_modify     map array                     # May improve efficiency
+
+neighbor        0.3 bin                       # A small skin keeps the fastmb cluster lists short
+neigh_modify    delay 0 every 1 check yes
+
+########################################
+
+read_data       liqC_2.5gcc_6000K.data.in
+replicate       2 2 2
+pair_style      chimesFF fastmb
+pair_coeff      * * ../../../../serial_interface/tests/force_fields/published_params.Carbon-2.0.Small.2+3+4b.Tersoff.txt
+
+########################################
+# RUN, DUMP, AND THERMO CONTROLS
+########################################
+
+velocity        all create 6000.0 12345 dist gaussian mom yes rot yes
+fix             1 all nve
+
+thermo_style    custom step temp pe ke etotal press pxx pyy pzz pxy pxz pyz
+thermo_modify   line one format float %20.8f flush yes
+thermo          1
+
+timestep        0.25
+run             20

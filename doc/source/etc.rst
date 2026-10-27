@@ -154,3 +154,30 @@ This pattern uses **hybrid ChIMES + MOMB** specifically to add **D2 dispersion c
     2. This capability is still under testing - please `let us know <https://groups.google.com/g/chimes_software>`_ if you observe strange behavior
     3. Assumes user wants single-atom energies to be added to the system energy. If you don't want to, zero the energy offsets in the parameter file
 
+
+Fast many-body evaluation (fastmb)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Installing with ``./install.sh FASTMB`` (which adds ``-DFASTMB`` to the compiler flags; it can be combined with ``TABULATION`` or ``FINGERPRINT``) compiles in a faster evaluation of the 3- and 4-body ChIMES terms, selected at run time by the keyword ``fastmb``:
+
+.. code-block:: text
+
+    neighbor        0.3 bin
+    neigh_modify    delay 0 every 1 check yes
+    pair_style      chimesFF fastmb
+    pair_coeff      * * some_standard_chimes_parameter_file.txt
+
+``fastmb`` evaluates the same polynomials with the same coefficients as the default code, reordered. Energies, forces and the virial agree with the default evaluation to floating-point roundoff (relative differences of about 1e-13, the size of the differences the default code shows between MPI rank counts), and parameter files are unchanged. It combines:
+
+* a per-pair cache of the cutoff-weighted Chebyshev polynomials and their derivatives, computed once per pair per step instead of once per cluster the pair belongs to;
+* sum factorization: the coefficients of each cluster type are stored as a compressed sparse fiber tree, and one sweep of the tree returns the cluster energy and every pair derivative, so partial products shared by terms are formed once;
+* SIMD batches: eight clusters of the same type pass through the tree together, one per lane of an AVX-512 register (double precision);
+* hierarchical reuse for the 4-body term: the cluster list is walked as a prefix tree of pairs, triangles and tetrahedra, and the contractions common to the tetrahedra on one pair or one triangle are done once;
+* cluster lists built as the triangles and tetrahedra of the Vietoris-Rips complex with adjacency bitsets instead of nested distance loops (the default loops are used automatically, on every rank, when the box is smaller than twice the padded many-body cutoff);
+* a flat hash table for the pair bookkeeping, and cluster ownership by a hash of the atom tag rather than the tag itself, which balances the work across MPI ranks.
+
+Keywords after ``fastmb`` switch single changes off for testing: ``nosimd`` (one cluster at a time), ``norips`` (default cluster-list loops), ``orient tag`` (default ownership rule) and ``nok4`` (4-body term by the tree sweep instead of hierarchical reuse). Setting the environment variable ``CHIMES_TIMING=1`` prints the time spent in each phase at exit, and ``CHIMES_MEMORY=1`` the memory held by the many-body data structures. ``fastmb`` is ignored, with a message, for tabulated 3-body parameters and in fingerprint runs. Without the ``FASTMB`` build option the keyword is an error.
+
+For full speed compile with OpenMP SIMD and the target vector instruction set; the makefiles set ``-qopenmp-simd``, and the UT-TACC makefile also ``-xCORE-AVX512``. A neighbor skin of about 0.3 Angstrom is recommended: cluster lists are rebuilt cheaply, and a smaller skin keeps fewer inactive clusters in them.
+
+On one Stampede3 SPR node (112 MPI ranks) with a 0.3 Angstrom skin, ``fastmb`` reduced the time per MD step relative to the default code by 182x for Carbon-2.0 Large (12,800 atoms of liquid carbon), 87x for the reshock nitrogen model (13,824 atoms) and 13x for Carbon-2.0 Small (102,400 atoms); over all many-body parameter sets in ``serial_interface/tests/force_fields`` the gain is 3.5x to 182x. To check an installation, run ``etc/lmp/tests/test_suite-fastmb/roundoff_check.sh`` (see ``etc/lmp/tests/README``).

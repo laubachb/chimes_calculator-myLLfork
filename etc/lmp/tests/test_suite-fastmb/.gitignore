@@ -1,0 +1,5 @@
+/current_output/
+/log.*
+/out.*
+/forces_*.dump
+/in.default.lammps

@@ -309,6 +309,96 @@ vector<double> interpolateTricubic      Note: This function only used if compile
                                         ==========================   ===
 
                                         Returns the energy value for 3 atoms i, j, k at a particular distance r_ij, r_ik, r_jk and sets the force vector for each atom i, j, k.
+string         fastmb_init              Note: This function and the other ``fastmb_`` functions are only compiled with the ``FASTMB`` option, for the fast many-body evaluation used by ``pair_style chimesFF fastmb``
+
+                                        No arguments. Builds the cutoff-variant tables and the coefficient tree of every 3- and 4-body cluster type. Returns an empty string, or the reason the parameter file cannot use fastmb.
+
+void           fastmb_resize_cache      ======   ===
+                                        Type     Description
+                                        ======   ===
+                                        int      Number of registered atom pairs
+                                        ======   ===
+
+                                        Allocates the per-pair cache of cutoff-weighted Chebyshev polynomials and derivatives.
+
+void           fastmb_fill_cache        ======   ===
+                                        Type     Description
+                                        ======   ===
+                                        int      Pair index
+                                        int      ChIMES pair type index (see fastmb_pair_type)
+                                        double   Pair distance
+                                        ======   ===
+
+                                        Stores the polynomials and derivatives of one pair for every cutoff variant of its pair type.
+
+int            fastmb_pair_type         ======   ===
+                                        Type     Description
+                                        ======   ===
+                                        int      Type index of the first atom
+                                        int      Type index of the second atom
+                                        ======   ===
+
+                                        Returns the ChIMES pair type index.
+
+int            fastmb_cluster_key       ======   ===
+                                        Type     Description
+                                        ======   ===
+                                        int      Number of atoms in the cluster (3 or 4)
+                                        int*     Type indices of the atoms in slot order
+                                        ======   ===
+
+                                        Returns the integer that identifies the ordered cluster type (fastmb_ncluster_keys gives the number of possible keys).
+
+bool           fastmb_cluster_active    ======   ===
+                                        Type     Description
+                                        ======   ===
+                                        int      Number of atoms in the cluster (3 or 4)
+                                        int      Cluster key
+                                        int*     Pair index of each slot (ij ik jk, or ij ik il jk jl kl)
+                                        ======   ===
+
+                                        True if the cluster type is included in the parameter file and every slot pair is inside its outer cutoff.
+
+bool           fastmb_compute_cluster   ======   ===
+                                        Type     Description
+                                        ======   ===
+                                        int      Number of atoms in the cluster (3 or 4)
+                                        int      Cluster key
+                                        int*     Pair index of each slot
+                                        double   Energy (updated by function)
+                                        double*  dE/dr of each slot (contents updated by function)
+                                        ======   ===
+
+                                        Energy and distance derivatives of one cluster by one sweep of its coefficient tree; returns false for an inactive cluster. Forces follow from dE/dr and the pair vectors.
+
+void           fastmb_compute_batch     ======   ===
+                                        Type     Description
+                                        ======   ===
+                                        int      Number of atoms in the cluster (3 or 4)
+                                        int      Cluster key
+                                        int*     Pair indices of up to fastmb_lanes active clusters, cluster by cluster
+                                        int      Number of clusters
+                                        double*  Energy of each cluster (contents updated by function)
+                                        double*  dE/dr of each slot of each cluster (contents updated by function)
+                                        ======   ===
+
+                                        Same as fastmb_compute_cluster for up to fastmb_lanes (8) clusters of one type, swept together with SIMD instructions.
+
+string         fastmb_init_4B_reuse     No arguments. Builds the dense 4-body coefficient tensors used by hierarchical reuse. Returns an empty string, or why the 4-body term keeps the tree sweep.
+
+void           fastmb_compute_4B_reuse  ======   ===
+                                        Type     Description
+                                        ======   ===
+                                        int      Cluster key
+                                        int      Number of clusters
+                                        int*     Atoms of the clusters, in list order
+                                        int*     Pair indices of their slots
+                                        double*  dE/dr per pair index (contents updated by function)
+                                        double   Energy (updated by function)
+                                        ======   ===
+
+                                        Energy and per-pair distance derivatives of the active 4-body clusters of one type by hierarchical reuse across the clusters that share a pair or a triangle.
+
 ============== =======================  =================
 
 

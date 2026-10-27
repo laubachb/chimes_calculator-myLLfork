@@ -170,6 +170,34 @@ cd - > /dev/null 2>&1
 
 
 
+########### For the fast many-body evaluation (fastmb)
+
+echo "Preparing a fresh installation with option FASTMB."
+
+cd ..
+./install.sh FASTMB
+cd - > /dev/null 2>&1
+
+rm -rf test_suite-fastmb/current_output > /dev/null 2>&1
+mkdir -p test_suite-fastmb/current_output
+cd test_suite-fastmb/current_output
+cp ../* . > /dev/null 2>&1
+
+params=`awk '/serial/{print $NF}' in.lammps`
+cp ../${params} params.txt
+awk '/pair_coeff/{$0="pair_coeff * * params.txt"}{print}' ../in.lammps > in.lammps
+
+echo "Running test: test_suite-fastmb"
+srun -n 36 ../../../exe/lmp_mpi_chimes -i in.lammps > out.lammps
+
+python3 ../../compare_logfiles.py ../expected_output/log.lammps log.lammps > compare.log.lammps
+
+cd - > /dev/null 2>&1
+
+
+
+
+
 failures=`wc -l */current*/compare* | awk 'BEGIN{c=0}{c+=$1}END{print c}'`
 
 if [ $failures -eq 0 ] ; then

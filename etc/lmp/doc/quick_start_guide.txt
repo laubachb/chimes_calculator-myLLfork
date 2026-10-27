@@ -29,6 +29,9 @@ link to download LAMMPS: https://lammps.sandia.gov/download.html
 make yes-manybody
 make mpi_chimes
 
+# Add -DFASTMB to CCFLAGS (what "./install.sh FASTMB" does) to compile in the fast many-body evaluation,
+# selected at run time with "pair_style chimesFF fastmb"; see the ChIMES in LAMMPS documentation.
+
 
 # To run a simulation using ChIMES parameters, a block like the following is needed in the main LAMMPS input file (i.e. "in.lammps):
 

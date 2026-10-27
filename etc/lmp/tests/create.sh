@@ -80,3 +80,26 @@ mkdir expected_output > /dev/null 2>&1
 mv log.lammps out.lammps expected_output
 cd - > /dev/null 2>&1 
 
+
+
+################# FASTMB
+
+# The expected output of test_suite-fastmb comes from the default evaluation (pair_style chimesFF)
+# so that the test checks fastmb against it; the FASTMB build runs both.
+
+echo "..."
+echo "Re-compiling to generate with the FASTMB flag..."
+echo ""
+cd ..
+pwd
+./install.sh FASTMB
+cd - > /dev/null 2>&1
+
+echo "Working on test_suite-fastmb"
+cd test_suite-fastmb
+sed 's/pair_style      chimesFF fastmb/pair_style      chimesFF/' in.lammps > in.default.lammps
+srun -n 36 ../../exe/lmp_mpi_chimes -i in.default.lammps > out.lammps
+rm -f in.default.lammps
+mkdir expected_output > /dev/null 2>&1
+mv log.lammps out.lammps expected_output
+cd - > /dev/null 2>&1
