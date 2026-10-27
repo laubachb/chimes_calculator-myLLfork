@@ -43,6 +43,10 @@
 #include <string>
 #include <fstream>
 #include <unordered_map>
+#ifdef FASTMB
+#include <algorithm>
+#include <utility>
+#endif
 
 using namespace LAMMPS_NS;
 
@@ -75,6 +79,8 @@ PairCHIMES::PairCHIMES(LAMMPS *lmp) : Pair(lmp)
 #ifdef FASTMB
     use_fastmb  = false;
     fastmb_simd = true;
+    fastmb_rips = true;
+    fastmb_warned_self_image = false;
 #endif
 #ifdef FINGERPRINT
     fingerprint = false;
@@ -129,9 +135,10 @@ PairCHIMES::~PairCHIMES()
 void PairCHIMES::settings(int narg, char **arg)
 {
 #ifdef FASTMB
-	// The keyword fastmb, anywhere in the argument list, selects the fast many-body evaluation;
-	// nosimd evaluates clusters one at a time instead of in SIMD batches (for testing).
-	// The remaining arguments are handled as before.
+	// The keyword fastmb, anywhere in the argument list, selects the fast many-body evaluation.
+	// For testing, nosimd evaluates clusters one at a time instead of in SIMD batches and norips
+	// builds the cluster lists with the nested loops of build_mb_neighlists. The remaining
+	// arguments are handled as before.
 
 	std::vector<char *> other_args;
 
@@ -141,6 +148,8 @@ void PairCHIMES::settings(int narg, char **arg)
 			use_fastmb = true;
 		else if (utils::strmatch(arg[a], "^nosimd$"))
 			fastmb_simd = false;
+		else if (utils::strmatch(arg[a], "^norips$"))
+			fastmb_rips = false;
 		else
 			other_args.push_back(arg[a]);
 	}
@@ -297,7 +306,8 @@ void PairCHIMES::coeff(int narg, char **arg)
 			error -> all(FLERR, "pair_style chimesFF fastmb: " + why);
 
 		if (comm->me == 0)
-			std::cout << "chimesFF: fastmb many-body evaluation enabled; SIMD batches " << (fastmb_simd ? "on" : "off") << std::endl;
+			std::cout << "chimesFF: fastmb many-body evaluation enabled; SIMD batches " << (fastmb_simd ? "on" : "off")
+			          << ", bitset cluster lists " << (fastmb_rips ? "on" : "off") << std::endl;
 	}
 #endif
 }
@@ -637,6 +647,9 @@ void PairCHIMES::compute(int eflag, int vflag)
 		if (chimes_calculator.rank == 0)
 			std::cout << "Updating chimesFF neighbor lists..." << std::endl;
 			
+#ifdef FASTMB
+		if (!(use_fastmb && fastmb_rips && build_fastmb_neighlists()))
+#endif
 		build_mb_neighlists();		
 #ifdef FASTMB
 		if (use_fastmb)
@@ -951,6 +964,195 @@ if (vflag_fdotr)
 }
 
 #ifdef FASTMB
+
+bool PairCHIMES::build_fastmb_neighlists()
+{
+	// ChIMES clusters are the sets of atoms in which every pair lies within the (padded) many-body
+	// cutoff: the triangles and tetrahedra of the Vietoris-Rips complex of the atoms. For each local
+	// atom i, take its forward neighbors (atoms with a larger tag), compute their mutual distances
+	// once and store the results as adjacency bitsets; triangles (i,a,b) are then the set bits of
+	// the row of a after a, and tetrahedra (i,a,b,c) the set bits of row a AND row b after b. This
+	// lists exactly the clusters build_mb_neighlists lists, each once from its lowest-tag atom.
+	//
+	// Returns false on every rank, with the lists cleared, if any rank sees two neighbor candidates
+	// with the same tag (periodic self-images of a box smaller than twice the padded cutoff), which
+	// the bitsets cannot represent; the caller then uses build_mb_neighlists.
+
+	if ((chimes_calculator.poly_orders[1] == 0) && (chimes_calculator.poly_orders[2] == 0))
+		return true;
+
+	neighborlist_3mers.clear();
+	neighborlist_4mers.clear();
+
+	tagint  *tag  = atom -> tag;
+	int     *type = atom -> type;
+	double **x    = atom -> x;
+
+	double maxcut_3b_padded = maxcut_3b + neighbor -> skin;
+	double maxcut_4b_padded = maxcut_4b + neighbor -> skin;
+	double cut_3b_sq = maxcut_3b_padded * maxcut_3b_padded;
+	double cut_4b_sq = maxcut_4b_padded * maxcut_4b_padded;
+	double cut_max_sq = std::max(cut_3b_sq, cut_4b_sq);
+	bool   do_4b = chimes_calculator.poly_orders[2] > 0;
+
+	std::vector<std::pair<tagint, int> > forward;    // (tag, local index) of the forward neighbors of i, sorted by tag
+	std::vector<unsigned long long>      adj_3b;     // [neighbor a][word] bit b set if a and b are within the 3-body cutoff
+	std::vector<unsigned long long>      adj_4b;
+	std::vector<char>                    in_3b;      // [neighbor a] a is within the 3-body cutoff of i
+	std::vector<char>                    in_4b;
+
+	int self_image = 0;
+
+	for (int ii = 0; ii < list->inum; ii++)
+	{
+		int i = list->ilist[ii];
+
+		if (chimes_type[type[i]-1] < 0)
+			continue;
+
+		int *jlist = list->firstneigh[i];
+
+		forward.clear();
+
+		for (int jj = 0; jj < list->numneigh[i]; jj++)
+		{
+			int j = jlist[jj] & NEIGHMASK;
+
+			if ((j == i) || (chimes_type[type[j]-1] < 0))
+				continue;
+
+			if (tag[j] < tag[i])
+				continue;
+
+			double dx = x[j][0] - x[i][0];
+			double dy = x[j][1] - x[i][1];
+			double dz = x[j][2] - x[i][2];
+
+			if (dx*dx + dy*dy + dz*dz < cut_max_sq)
+				forward.push_back(std::make_pair(tag[j], j));
+		}
+
+		std::sort(forward.begin(), forward.end());
+
+		int nf    = forward.size();
+		int nword = (nf + 63) / 64;
+
+		for (int a = 1; a < nf; a++)
+			if (forward[a].first == forward[a-1].first)
+				self_image = 1;
+
+		if (self_image)
+			break;
+
+		adj_3b.assign((size_t)nf*nword, 0ULL);
+		adj_4b.assign((size_t)nf*nword, 0ULL);
+		in_3b.assign(nf, 0);
+		in_4b.assign(nf, 0);
+
+		// Distances from i and between forward neighbors, each computed once
+
+		for (int a = 0; a < nf; a++)
+		{
+			int    ja = forward[a].second;
+			double ax = x[ja][0] - x[i][0];
+			double ay = x[ja][1] - x[i][1];
+			double az = x[ja][2] - x[i][2];
+			double ra_sq = ax*ax + ay*ay + az*az;
+
+			in_3b[a] = ra_sq < cut_3b_sq;
+			in_4b[a] = ra_sq < cut_4b_sq;
+
+			for (int b = a+1; b < nf; b++)
+			{
+				int    jb = forward[b].second;
+				double bx = x[jb][0] - x[ja][0];
+				double by = x[jb][1] - x[ja][1];
+				double bz = x[jb][2] - x[ja][2];
+				double rab_sq = bx*bx + by*by + bz*bz;
+
+				if (rab_sq < cut_3b_sq)
+				{
+					adj_3b[(size_t)a*nword + b/64] |= 1ULL << (b%64);
+					adj_3b[(size_t)b*nword + a/64] |= 1ULL << (a%64);
+				}
+				if (rab_sq < cut_4b_sq)
+				{
+					adj_4b[(size_t)a*nword + b/64] |= 1ULL << (b%64);
+					adj_4b[(size_t)b*nword + a/64] |= 1ULL << (a%64);
+				}
+			}
+		}
+
+		// Triangles (i,a,b) and tetrahedra (i,a,b,c) with a < b < c in tag order
+
+		for (int a = 0; a < nf; a++)
+		{
+			for (int b = a+1; b < nf; b++)
+			{
+				bool edge_3b = (adj_3b[(size_t)a*nword + b/64] >> (b%64)) & 1ULL;
+				bool edge_4b = (adj_4b[(size_t)a*nword + b/64] >> (b%64)) & 1ULL;
+
+				if (in_3b[a] && in_3b[b] && edge_3b)
+				{
+					tmp_3mer[0] = i;
+					tmp_3mer[1] = forward[a].second;
+					tmp_3mer[2] = forward[b].second;
+					neighborlist_3mers.push_back(tmp_3mer);
+				}
+
+				if (!do_4b || !(in_4b[a] && in_4b[b] && edge_4b))
+					continue;
+
+				// Fourth atoms: neighbors after b that are within the 4-body cutoff of both a and b
+
+				for (int w = b/64; w < nword; w++)
+				{
+					unsigned long long bits = adj_4b[(size_t)a*nword + w] & adj_4b[(size_t)b*nword + w];
+
+					if (w == b/64)
+						bits &= (b%64 == 63) ? 0ULL : (~0ULL << (b%64 + 1));
+
+					while (bits)
+					{
+						int c = w*64 + __builtin_ctzll(bits);
+						bits &= bits - 1;
+
+						if (!in_4b[c])
+							continue;
+
+						tmp_4mer[0] = i;
+						tmp_4mer[1] = forward[a].second;
+						tmp_4mer[2] = forward[b].second;
+						tmp_4mer[3] = forward[c].second;
+						neighborlist_4mers.push_back(tmp_4mer);
+					}
+				}
+			}
+		}
+	}
+
+	// The choice between this enumeration and build_mb_neighlists must be the same on every rank:
+	// mixing them double-counts or drops clusters that span rank boundaries
+
+	int any_self_image = 0;
+
+	MPI_Allreduce(&self_image, &any_self_image, 1, MPI_INT, MPI_MAX, world);
+
+	if (any_self_image)
+	{
+		neighborlist_3mers.clear();
+		neighborlist_4mers.clear();
+
+		if ((comm->me == 0) && !fastmb_warned_self_image)
+			std::cout << "chimesFF: fastmb cluster lists fall back to the default loops (box smaller than twice the padded many-body cutoff)" << std::endl;
+
+		fastmb_warned_self_image = true;
+
+		return false;
+	}
+
+	return true;
+}
 
 void PairCHIMES::build_fastmb_pair_registry()
 {

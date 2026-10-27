@@ -80,6 +80,8 @@ namespace LAMMPS_NS
 
 			bool                use_fastmb;             // Evaluate the 3- and 4-body terms through the chimesFF pair cache
 			bool                fastmb_simd;            // Sweep clusters of one type in SIMD batches (keyword nosimd: one at a time)
+			bool                fastmb_rips;            // Build cluster lists by bitset intersection (keyword norips: the nested loops of build_mb_neighlists)
+			bool                fastmb_warned_self_image; // The fall-back to build_mb_neighlists has been reported once
 
 			std::vector<int>    fastmb_pair_i;          // [pair idx] local index of the first atom of a registered pair (i < j)
 			std::vector<int>    fastmb_pair_j;          // [pair idx] local index of the second atom
@@ -89,6 +91,7 @@ namespace LAMMPS_NS
 			std::vector<int>    fastmb_4mer_pair_idx;   // [4mer idx*6 + slot]
 			std::vector<std::vector<int> > fastmb_batches; // [cluster key] clusters waiting for a full SIMD batch
 
+			bool   build_fastmb_neighlists();           // Cluster lists by bitset intersection; false if the box is too small (caller then uses build_mb_neighlists on every rank)
 			void   build_fastmb_pair_registry();        // Assigns pair indices to the pairs of the many-body neighbor lists
 			void   compute_fastmb(int nbody);           // 3- or 4-body forces, energy and virial from the pair cache
 #endif
