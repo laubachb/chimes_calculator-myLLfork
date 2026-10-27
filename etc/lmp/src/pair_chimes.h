@@ -89,6 +89,8 @@ namespace LAMMPS_NS
 			std::vector<double> fastmb_pair_dr;         // [pair idx*CHDIM + dim] distance components, atom j minus atom i
 			std::vector<int>    fastmb_3mer_pair_idx;   // [3mer idx*3 + slot] 2*pair idx, plus 1 if the slot runs from j to i
 			std::vector<int>    fastmb_4mer_pair_idx;   // [4mer idx*6 + slot]
+			std::vector<long long> fastmb_registry_keys; // Open-addressing hash table of the registered pairs: pair key, -1 if empty
+			std::vector<int>       fastmb_registry_vals; // Pair index of the pair stored in the same table slot
 			std::vector<std::vector<int> > fastmb_batches; // [cluster key] clusters waiting for a full SIMD batch
 
 			bool   build_fastmb_neighlists();           // Cluster lists by bitset intersection; false if the box is too small (caller then uses build_mb_neighlists on every rank)

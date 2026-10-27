@@ -42,7 +42,6 @@
 #include <sstream>
 #include <string>
 #include <fstream>
-#include <unordered_map>
 #ifdef FASTMB
 #include <algorithm>
 #include <utility>
@@ -1165,26 +1164,71 @@ void PairCHIMES::build_fastmb_pair_registry()
 	fastmb_3mer_pair_idx.resize(3*neighborlist_3mers.size());
 	fastmb_4mer_pair_idx.resize(6*neighborlist_4mers.size());
 
-	std::unordered_map<long long, int> pair_index;	// (i, j) with i < j -> pair idx
-	long long nall = atom->nlocal + atom->nghost;
+	// The pairs are looked up in a flat open-addressing hash table (linear probing, power-of-two
+	// size, grown at half load) rather than a node-based map, which allocates per entry
+
+	long long nall     = atom->nlocal + atom->nghost;
+	size_t    capacity = 1024;
+
+	while (capacity < 8 * (size_t)nall)
+		capacity <<= 1;
+
+	fastmb_registry_keys.assign(capacity, -1);
+	fastmb_registry_vals.resize(capacity);
+
+	auto table_slot = [&](long long key) -> size_t
+	{
+		size_t h = (size_t)((unsigned long long)key * 0x9E3779B97F4A7C15ULL) & (capacity - 1);
+
+		while ((fastmb_registry_keys[h] >= 0) && (fastmb_registry_keys[h] != key))
+			h = (h + 1) & (capacity - 1);
+
+		return h;
+	};
+
+	auto grow_table = [&]()
+	{
+		std::vector<long long> old_keys(fastmb_registry_keys);
+		std::vector<int>       old_vals(fastmb_registry_vals);
+
+		capacity <<= 1;
+
+		fastmb_registry_keys.assign(capacity, -1);
+		fastmb_registry_vals.resize(capacity);
+
+		for (size_t t = 0; t < old_keys.size(); t++)
+		{
+			if (old_keys[t] < 0)
+				continue;
+
+			size_t h = table_slot(old_keys[t]);
+
+			fastmb_registry_keys[h] = old_keys[t];
+			fastmb_registry_vals[h] = old_vals[t];
+		}
+	};
 
 	auto register_pair = [&](int u, int v) -> int
 	{
 		int       i   = (u < v) ? u : v;
 		int       j   = (u < v) ? v : u;
 		long long key = (long long)i*nall + j;
+		size_t    h   = table_slot(key);
 		int       idx;
 
-		std::unordered_map<long long, int>::iterator it = pair_index.find(key);
-
-		if (it != pair_index.end())
-			idx = it->second;
+		if (fastmb_registry_keys[h] == key)
+			idx = fastmb_registry_vals[h];
 		else
 		{
 			idx = fastmb_pair_i.size();
-			pair_index[key] = idx;
+
+			fastmb_registry_keys[h] = key;
+			fastmb_registry_vals[h] = idx;
 			fastmb_pair_i.push_back(i);
 			fastmb_pair_j.push_back(j);
+
+			if (2 * fastmb_pair_i.size() > capacity)
+				grow_table();
 		}
 
 		return 2*idx + ((u < v) ? 0 : 1);
