@@ -177,6 +177,28 @@ inline chimesFastMBCache::chimesFastMBCache() : nvariants(0), stride(0)
     ;
 }
 
+// Coefficient tree of one cluster type: the M-index coefficient tensor stored as a compressed sparse
+// fiber (CSF) tree. The terms are sorted by their power tuples; terms that share the first k powers
+// share one node at level k. One sweep of the tree gives the cluster energy and all M derivatives.
+
+template <int M>
+class chimesFastMBTree
+{
+public:
+    inline chimesFastMBTree() ;
+
+    vector<unsigned char> power[M];    // [level][node] power of the slot at that level
+    vector<int>           child[M-1];  // [level][node] first child at the next level; children of node n are child[n]..child[n+1]-1
+    vector<double>        coeff;       // [leaf] polynomial coefficient
+    int                   nroots;      // Nodes at level 0
+} ;
+
+template <int M>
+inline chimesFastMBTree<M>::chimesFastMBTree() : nroots(0)
+{
+    ;
+}
+
 #endif
 
 enum class fcutType
@@ -293,14 +315,16 @@ public:
 #ifdef FASTMB
     // The 3- and 4-body terms are evaluated from a per-pair cache of the cutoff-weighted Chebyshev
     // polynomials, X_n(r) = fcut(r) T_n(s(r)), and their derivatives D_n(r) = dX_n/dr, filled once per
-    // pair per step and shared by every cluster that contains the pair. The arithmetic is that of
-    // compute_3B/compute_4B; only its order changes, so results agree to floating-point roundoff.
+    // pair per step and shared by every cluster that contains the pair, and from the coefficient tree
+    // of each cluster type, which sums the polynomial so that partial products shared by terms are
+    // formed once. The arithmetic is that of compute_3B/compute_4B; only its order changes, so results
+    // agree to floating-point roundoff.
     //
     // A pair index is the caller's running index of a registered atom pair. Slots are the pairs of a
     // cluster in the order ij ik jk (3-body) or ij ik il jk jl kl (4-body). A cluster key is the
     // integer fastmb_cluster_key builds from the atom type indices of a cluster in slot order.
 
-    string fastmb_init();                                                   // Builds the cutoff-variant tables; returns "" or the reason the parameter file cannot use fastmb
+    string fastmb_init();                                                   // Builds the cutoff-variant tables and coefficient trees; returns "" or the reason the parameter file cannot use fastmb
     void   fastmb_resize_cache(int npairs);                                 // Allocates the cache for npairs registered pairs
     void   fastmb_fill_cache(int pair_idx, int pair_typ, double dx);        // Stores X and D of one pair at distance dx, for every cutoff variant of its pair type
     int    fastmb_pair_type(int typ_idx_1, int typ_idx_2);                  // ChIMES pair type index of two atom type indices
@@ -396,6 +420,8 @@ private:
     chimesFastMBVariants fastmb_variants_4b;   // Cutoff variants of the 4-body cluster slots
     chimesFastMBCache    fastmb_cache_3b;      // Per-pair polynomial cache for the 3-body term
     chimesFastMBCache    fastmb_cache_4b;      // Per-pair polynomial cache for the 4-body term
+    vector<chimesFastMBTree<3> > fastmb_trees_3b;  // [ntrips] coefficient tree of each 3-body cluster type
+    vector<chimesFastMBTree<6> > fastmb_trees_4b;  // [nquads] coefficient tree of each 4-body cluster type
     vector<double>       fastmb_Tn;            // Scratch for set_cheby_polys
     vector<double>       fastmb_Tnd;
 

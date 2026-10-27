@@ -3089,11 +3089,146 @@ void chimesFF::build_pair_int_trip_map()
 // Fast many-body evaluation (pair_style chimesFF fastmb)
 ////////////////////////////////////////////////////////////////////////////////
 
+namespace
+{
+    // Build the coefficient tree of one cluster type from its powers (file column order) and
+    // coefficients. Terms are sorted by their power tuples, so terms with equal leading powers
+    // become one path that forks where the powers first differ.
+
+    template <int M>
+    chimesFastMBTree<M> fastmb_build_tree(const vector<vector<int> > & powers, const vector<double> & params, int ncoeffs)
+    {
+        typedef pair<array<unsigned char, M>, double> fastmb_term;
+
+        chimesFastMBTree<M>  tree;
+        vector<fastmb_term>  terms(ncoeffs);
+
+        for (int c = 0; c < ncoeffs; c++)
+        {
+            for (int m = 0; m < M; m++)
+                terms[c].first[m] = powers[c][m];
+
+            terms[c].second = params[c];
+        }
+
+        sort(terms.begin(), terms.end(), [](const fastmb_term & a, const fastmb_term & b) { return a.first < b.first; });
+
+        for (int t = 0; t < terms.size(); t++)
+        {
+            // First level at which this term leaves the previous term's path
+
+            int k0 = 0;
+
+            if (t > 0)
+            {
+                while ((k0 < M) && (terms[t].first[k0] == terms[t-1].first[k0]))
+                    k0++;
+
+                if (k0 == M)    // Repeated power tuple: a sibling leaf with its own coefficient
+                    k0 = M - 1;
+            }
+
+            for (int k = k0; k < M; k++)
+            {
+                if (k < M-1)
+                    tree.child[k].push_back(tree.power[k+1].size());
+
+                tree.power[k].push_back(terms[t].first[k]);
+            }
+
+            tree.coeff.push_back(terms[t].second);
+        }
+
+        for (int k = 0; k < M-1; k++)
+            tree.child[k].push_back(tree.power[k+1].size());
+
+        tree.nroots = tree.power[0].size();
+
+        return tree;
+    }
+
+    // Sweep of the tree below one node at level K. On return out[0] holds the value of the subtree
+    // (the sum of its terms, each divided by the polynomials of levels 0..K-1) and out[1+j] its
+    // derivative with respect to the distance of level K+j. X[m] and D[m] are the cached
+    // polynomials and derivatives of the pair in column m.
+
+    template <bool B> struct fastmb_flag {};
+
+    template <int K, int M>
+    struct fastmb_node
+    {
+        static inline void eval(const chimesFastMBTree<M> & tree, int n, const double *const *X, const double *const *D, double *out)
+        {
+            eval(tree, n, X, D, out, fastmb_flag<K == M-1>());
+        }
+
+        // A leaf: coefficient times the last slot's polynomial, and its derivative
+
+        static inline void eval(const chimesFastMBTree<M> & tree, int n, const double *const *X, const double *const *D, double *out, fastmb_flag<true>)
+        {
+            const int p = tree.power[M-1][n];
+
+            out[0] = tree.coeff[n] * X[M-1][p];
+            out[1] = tree.coeff[n] * D[M-1][p];
+        }
+
+        // An inner node: sum the children, then multiply by this level's polynomial (value and all
+        // deeper derivatives) or its derivative (this level's derivative)
+
+        static inline void eval(const chimesFastMBTree<M> & tree, int n, const double *const *X, const double *const *D, double *out, fastmb_flag<false>)
+        {
+            double acc[M-K] = {0};
+
+            for (int c = tree.child[K][n]; c < tree.child[K][n+1]; c++)
+            {
+                double o[M-K];
+
+                fastmb_node<(K < M-1 ? K+1 : K), M>::eval(tree, c, X, D, o);
+
+                for (int j = 0; j < M-K; j++)
+                    acc[j] += o[j];
+            }
+
+            const int    p = tree.power[K][n];
+            const double x = X[K][p];
+
+            out[0] = x * acc[0];
+            out[1] = D[K][p] * acc[0];
+
+            for (int j = 1; j < M-K; j++)
+                out[1+j] = x * acc[j];
+        }
+    };
+
+    // Energy and derivatives of one cluster: sum the root subtrees
+
+    template <int M>
+    inline void fastmb_sweep(const chimesFastMBTree<M> & tree, const double *const *X, const double *const *D, double & energy, double *deriv_by_column)
+    {
+        double acc[M+1] = {0};
+
+        for (int n = 0; n < tree.nroots; n++)
+        {
+            double o[M+1];
+
+            fastmb_node<0, M>::eval(tree, n, X, D, o);
+
+            for (int j = 0; j <= M; j++)
+                acc[j] += o[j];
+        }
+
+        energy = acc[0];
+
+        for (int m = 0; m < M; m++)
+            deriv_by_column[m] = acc[1+m];
+    }
+}
+
 string chimesFF::fastmb_init()
 {
-    // Tabulate the cutoff variant used by every slot of every 3- and 4-body cluster type, and size
-    // the scratch vectors. Returns an empty string on success, otherwise the reason this parameter
-    // file cannot be evaluated with fastmb.
+    // Tabulate the cutoff variant used by every slot of every 3- and 4-body cluster type, build the
+    // coefficient tree of every cluster type, and size the scratch vectors. Returns an empty string on
+    // success, otherwise the reason this parameter file cannot be evaluated with fastmb.
 
     fastmb_variants_3b = chimesFastMBVariants();
     fastmb_variants_4b = chimesFastMBVariants();
@@ -3101,11 +3236,24 @@ string chimesFF::fastmb_init()
     fastmb_variants_3b.order = (poly_orders.size() > 1) ? poly_orders[1] : 0;
     fastmb_variants_4b.order = (poly_orders.size() > 2) ? poly_orders[2] : 0;
 
+    fastmb_trees_3b.clear();
+    fastmb_trees_4b.clear();
+
     if (fastmb_variants_3b.order > 0)
+    {
         fastmb_init_variants(3, fastmb_variants_3b);
 
+        for (int t = 0; t < chimes_3b_params.size(); t++)
+            fastmb_trees_3b.push_back(fastmb_build_tree<3>(chimes_3b_powers[t], chimes_3b_params[t], ncoeffs_3b[t]));
+    }
+
     if (fastmb_variants_4b.order > 0)
+    {
         fastmb_init_variants(4, fastmb_variants_4b);
+
+        for (int q = 0; q < chimes_4b_params.size(); q++)
+            fastmb_trees_4b.push_back(fastmb_build_tree<6>(chimes_4b_powers[q], chimes_4b_params[q], ncoeffs_4b[q]));
+    }
 
     int max_order = max(fastmb_variants_3b.order, fastmb_variants_4b.order);
 
@@ -3278,8 +3426,8 @@ bool chimesFF::fastmb_cluster_active(int nbody, int key, const int *pair_idxs)
 
 bool chimesFF::fastmb_compute_cluster(int nbody, int key, const int *pair_idxs, double & energy, double *deriv)
 {
-    // Energy and distance derivatives of one cluster, term by term as in compute_3B/compute_4B, with
-    // the polynomials read from the pair cache. The caller forms forces and stresses from deriv.
+    // Energy and distance derivatives of one cluster by one sweep of its coefficient tree, with the
+    // polynomials read from the pair cache. The caller forms forces and stresses from deriv.
 
     const int npairs  = (nbody == 3) ? 3 : 6;
     int       clu_idx = (nbody == 3) ? atom_int_trip_map[key] : atom_int_quad_map[key];
@@ -3293,6 +3441,9 @@ bool chimesFF::fastmb_compute_cluster(int nbody, int key, const int *pair_idxs, 
     const vector<int>          & mapped_pair_idx = (nbody == 3) ? pair_int_trip_map[key] : pair_int_quad_map[key];
     const int                    norder          = variants.order + 1;
 
+    // The tree levels follow the parameter-file column order; column m of this cluster type is slot
+    // mapped_pair_idx[s] for the s with mapped_pair_idx[s] == m
+
     const double *X[6];
     const double *D[6];
 
@@ -3303,52 +3454,19 @@ bool chimesFF::fastmb_compute_cluster(int nbody, int key, const int *pair_idxs, 
         if (off < 0)    // A pair at or beyond its outer cutoff: no interaction
             return false;
 
-        X[s] = &cache.data[off];
-        D[s] = &cache.data[off + norder];
+        X[mapped_pair_idx[s]] = &cache.data[off];
+        D[mapped_pair_idx[s]] = &cache.data[off + norder];
     }
 
-    const vector<vector<int> > & powers  = (nbody == 3) ? chimes_3b_powers[clu_idx] : chimes_4b_powers[clu_idx];
-    const vector<double>       & params  = (nbody == 3) ? chimes_3b_params[clu_idx] : chimes_4b_params[clu_idx];
-    const int                    ncoeffs = (nbody == 3) ? ncoeffs_3b[clu_idx]       : ncoeffs_4b[clu_idx];
+    double deriv_by_column[6];
 
-    energy = 0.0;
+    if (nbody == 3)
+        fastmb_sweep<3>(fastmb_trees_3b[clu_idx], X, D, energy, deriv_by_column);
+    else
+        fastmb_sweep<6>(fastmb_trees_4b[clu_idx], X, D, energy, deriv_by_column);
 
     for (int s = 0; s < npairs; s++)
-        deriv[s] = 0.0;
-
-    double x[6];
-    double d[6];
-
-    for (int coeffs = 0; coeffs < ncoeffs; coeffs++)
-    {
-        double coeff = params[coeffs];
-
-        for (int s = 0; s < npairs; s++)
-        {
-            int power = powers[coeffs][mapped_pair_idx[s]];
-
-            x[s] = X[s][power];
-            d[s] = D[s][power];
-        }
-
-        double product = coeff;
-
-        for (int s = 0; s < npairs; s++)
-            product *= x[s];
-
-        energy += product;
-
-        for (int s = 0; s < npairs; s++)
-        {
-            double term = coeff * d[s];
-
-            for (int m = 0; m < npairs; m++)
-                if (m != s)
-                    term *= x[m];
-
-            deriv[s] += term;
-        }
-    }
+        deriv[s] = deriv_by_column[mapped_pair_idx[s]];
 
     return true;
 }
