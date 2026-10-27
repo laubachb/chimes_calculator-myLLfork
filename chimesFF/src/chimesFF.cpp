@@ -3083,3 +3083,274 @@ void chimesFF::build_pair_int_trip_map()
     
 }
 
+#ifdef FASTMB
+
+////////////////////////////////////////////////////////////////////////////////
+// Fast many-body evaluation (pair_style chimesFF fastmb)
+////////////////////////////////////////////////////////////////////////////////
+
+string chimesFF::fastmb_init()
+{
+    // Tabulate the cutoff variant used by every slot of every 3- and 4-body cluster type, and size
+    // the scratch vectors. Returns an empty string on success, otherwise the reason this parameter
+    // file cannot be evaluated with fastmb.
+
+    fastmb_variants_3b = chimesFastMBVariants();
+    fastmb_variants_4b = chimesFastMBVariants();
+
+    fastmb_variants_3b.order = (poly_orders.size() > 1) ? poly_orders[1] : 0;
+    fastmb_variants_4b.order = (poly_orders.size() > 2) ? poly_orders[2] : 0;
+
+    if (fastmb_variants_3b.order > 0)
+        fastmb_init_variants(3, fastmb_variants_3b);
+
+    if (fastmb_variants_4b.order > 0)
+        fastmb_init_variants(4, fastmb_variants_4b);
+
+    int max_order = max(fastmb_variants_3b.order, fastmb_variants_4b.order);
+
+    fastmb_Tn .assign(max_order+1, 0.0);
+    fastmb_Tnd.assign(max_order+1, 0.0);
+
+    return "";
+}
+
+void chimesFF::fastmb_init_variants(int nbody, chimesFastMBVariants & variants)
+{
+    // For each ordered cluster of atom types (key), record the (pair type, inner cutoff, outer cutoff)
+    // variant of every slot, as compute_3B/compute_4B look them up for a cluster of those types.
+
+    static const int slot_atoms_3b[3][2] = {{0,1},{0,2},{1,2}};
+    static const int slot_atoms_4b[6][2] = {{0,1},{0,2},{0,3},{1,2},{1,3},{2,3}};
+
+    const int   npairs           = (nbody == 3) ? 3 : 6;
+    const int (*slot_atoms)[2]   = (nbody == 3) ? slot_atoms_3b : slot_atoms_4b;
+    const int   nkeys            = fastmb_ncluster_keys(nbody);
+
+    variants.slot_variant.assign(nkeys, vector<int>(npairs, -1));
+    variants.by_pair_type.assign(chimes_2b_cutoff.size(), vector<int>());
+
+    int typ_idxs[4];
+
+    for (int key = 0; key < nkeys; key++)
+    {
+        // Decode the key into atom type indices (see fastmb_cluster_key)
+
+        int remainder = key;
+
+        for (int a = nbody-1; a >= 0; a--)
+        {
+            typ_idxs[a] = remainder % natmtyps;
+            remainder  /= natmtyps;
+        }
+
+        int clu_idx = (nbody == 3) ? atom_int_trip_map[key] : atom_int_quad_map[key];
+
+        if (clu_idx < 0)    // Excluded cluster type
+            continue;
+
+        const vector<int> & mapped_pair_idx = (nbody == 3) ? pair_int_trip_map[key] : pair_int_quad_map[key];
+
+        for (int s = 0; s < npairs; s++)
+        {
+            int    col      = mapped_pair_idx[s];
+            int    pair_typ = atom_int_pair_map[typ_idxs[slot_atoms[s][0]]*natmtyps + typ_idxs[slot_atoms[s][1]]];
+            double inner    = (nbody == 3) ? chimes_3b_cutoff[clu_idx][0][col] : chimes_4b_cutoff[clu_idx][0][col];
+            double outer    = (nbody == 3) ? chimes_3b_cutoff[clu_idx][1][col] : chimes_4b_cutoff[clu_idx][1][col];
+
+            variants.slot_variant[key][s] = variants.get(pair_typ, inner, outer);
+        }
+    }
+
+    for (int v = 0; v < variants.cutoff.size(); v++)
+        variants.by_pair_type[variants.pair_type[v]].push_back(v);
+}
+
+void chimesFF::fastmb_resize_cache(int npairs)
+{
+    chimesFastMBCache    *caches[2]   = {&fastmb_cache_3b,    &fastmb_cache_4b};
+    chimesFastMBVariants *variants[2] = {&fastmb_variants_3b, &fastmb_variants_4b};
+
+    for (int b = 0; b < 2; b++)
+    {
+        caches[b]->nvariants = variants[b]->cutoff.size();
+        caches[b]->stride    = 2 * (variants[b]->order + 1);
+
+        caches[b]->offset.assign((size_t)npairs * caches[b]->nvariants, -1);
+        caches[b]->data  .resize((size_t)npairs * caches[b]->nvariants * caches[b]->stride);
+    }
+}
+
+void chimesFF::fastmb_fill_cache(int pair_idx, int pair_typ, double dx)
+{
+    if (fastmb_variants_3b.order > 0)
+        fastmb_fill_cache_one(fastmb_cache_3b, fastmb_variants_3b, pair_idx, pair_typ, dx);
+
+    if (fastmb_variants_4b.order > 0)
+        fastmb_fill_cache_one(fastmb_cache_4b, fastmb_variants_4b, pair_idx, pair_typ, dx);
+}
+
+void chimesFF::fastmb_fill_cache_one(chimesFastMBCache & cache, const chimesFastMBVariants & variants, int pair_idx, int pair_typ, double dx)
+{
+    // Same polynomials and cutoff function as compute_3B/compute_4B, stored once per (pair, variant)
+
+    const int           norder = variants.order + 1;
+    const vector<int> & vlist  = variants.by_pair_type[pair_typ];
+
+    for (int iv = 0; iv < vlist.size(); iv++)
+    {
+        int    v     = vlist[iv];
+        size_t entry = (size_t)pair_idx * cache.nvariants + v;
+        double inner = variants.cutoff[v][0];
+        double outer = variants.cutoff[v][1];
+
+        if (dx >= outer)    // No interaction through this variant
+        {
+            cache.offset[entry] = -1;
+            continue;
+        }
+
+        set_cheby_polys(fastmb_Tn, fastmb_Tnd, dx, morse_var[pair_typ], inner, outer, variants.order);
+
+        double fcut, fcutderiv;
+
+        get_fcut(dx, outer, fcut, fcutderiv);
+
+        size_t  off = entry * cache.stride;
+        double *X   = &cache.data[off];
+        double *D   = X + norder;
+
+        cache.offset[entry] = off;
+
+        for (int n = 0; n < norder; n++)
+        {
+            X[n] = fcut * fastmb_Tn[n];
+            D[n] = fcut * fastmb_Tnd[n] + fcutderiv * fastmb_Tn[n];
+        }
+    }
+}
+
+int chimesFF::fastmb_pair_type(int typ_idx_1, int typ_idx_2)
+{
+    return atom_int_pair_map[typ_idx_1*natmtyps + typ_idx_2];
+}
+
+int chimesFF::fastmb_cluster_key(int nbody, const int *typ_idxs)
+{
+    // Same integer as compute_3B/compute_4B build to index atom_int_trip_map/atom_int_quad_map
+
+    int key = 0;
+
+    for (int a = 0; a < nbody; a++)
+        key = key*natmtyps + typ_idxs[a];
+
+    return key;
+}
+
+int chimesFF::fastmb_ncluster_keys(int nbody)
+{
+    int nkeys = 1;
+
+    for (int a = 0; a < nbody; a++)
+        nkeys *= natmtyps;
+
+    return nkeys;
+}
+
+bool chimesFF::fastmb_cluster_active(int nbody, int key, const int *pair_idxs)
+{
+    const int npairs  = (nbody == 3) ? 3 : 6;
+    int       clu_idx = (nbody == 3) ? atom_int_trip_map[key] : atom_int_quad_map[key];
+
+    if (clu_idx < 0)
+        return false;
+
+    const chimesFastMBCache    & cache        = (nbody == 3) ? fastmb_cache_3b    : fastmb_cache_4b;
+    const chimesFastMBVariants & variants     = (nbody == 3) ? fastmb_variants_3b : fastmb_variants_4b;
+    const vector<int>          & slot_variant = variants.slot_variant[key];
+
+    for (int s = 0; s < npairs; s++)
+        if (cache.offset[(size_t)pair_idxs[s]*cache.nvariants + slot_variant[s]] < 0)
+            return false;
+
+    return true;
+}
+
+bool chimesFF::fastmb_compute_cluster(int nbody, int key, const int *pair_idxs, double & energy, double *deriv)
+{
+    // Energy and distance derivatives of one cluster, term by term as in compute_3B/compute_4B, with
+    // the polynomials read from the pair cache. The caller forms forces and stresses from deriv.
+
+    const int npairs  = (nbody == 3) ? 3 : 6;
+    int       clu_idx = (nbody == 3) ? atom_int_trip_map[key] : atom_int_quad_map[key];
+
+    if (clu_idx < 0)    // Skipping an excluded interaction
+        return false;
+
+    const chimesFastMBCache    & cache           = (nbody == 3) ? fastmb_cache_3b    : fastmb_cache_4b;
+    const chimesFastMBVariants & variants        = (nbody == 3) ? fastmb_variants_3b : fastmb_variants_4b;
+    const vector<int>          & slot_variant    = variants.slot_variant[key];
+    const vector<int>          & mapped_pair_idx = (nbody == 3) ? pair_int_trip_map[key] : pair_int_quad_map[key];
+    const int                    norder          = variants.order + 1;
+
+    const double *X[6];
+    const double *D[6];
+
+    for (int s = 0; s < npairs; s++)
+    {
+        int off = cache.offset[(size_t)pair_idxs[s]*cache.nvariants + slot_variant[s]];
+
+        if (off < 0)    // A pair at or beyond its outer cutoff: no interaction
+            return false;
+
+        X[s] = &cache.data[off];
+        D[s] = &cache.data[off + norder];
+    }
+
+    const vector<vector<int> > & powers  = (nbody == 3) ? chimes_3b_powers[clu_idx] : chimes_4b_powers[clu_idx];
+    const vector<double>       & params  = (nbody == 3) ? chimes_3b_params[clu_idx] : chimes_4b_params[clu_idx];
+    const int                    ncoeffs = (nbody == 3) ? ncoeffs_3b[clu_idx]       : ncoeffs_4b[clu_idx];
+
+    energy = 0.0;
+
+    for (int s = 0; s < npairs; s++)
+        deriv[s] = 0.0;
+
+    double x[6];
+    double d[6];
+
+    for (int coeffs = 0; coeffs < ncoeffs; coeffs++)
+    {
+        double coeff = params[coeffs];
+
+        for (int s = 0; s < npairs; s++)
+        {
+            int power = powers[coeffs][mapped_pair_idx[s]];
+
+            x[s] = X[s][power];
+            d[s] = D[s][power];
+        }
+
+        double product = coeff;
+
+        for (int s = 0; s < npairs; s++)
+            product *= x[s];
+
+        energy += product;
+
+        for (int s = 0; s < npairs; s++)
+        {
+            double term = coeff * d[s];
+
+            for (int m = 0; m < npairs; m++)
+                if (m != s)
+                    term *= x[m];
+
+            deriv[s] += term;
+        }
+    }
+
+    return true;
+}
+
+#endif

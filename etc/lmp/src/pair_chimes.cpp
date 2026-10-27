@@ -42,6 +42,7 @@
 #include <sstream>
 #include <string>
 #include <fstream>
+#include <unordered_map>
 
 using namespace LAMMPS_NS;
 
@@ -71,6 +72,9 @@ PairCHIMES::PairCHIMES(LAMMPS *lmp) : Pair(lmp)
 	
 	chimes_calculator.init(me);  
     for_fitting = false;
+#ifdef FASTMB
+    use_fastmb  = false;
+#endif
 #ifdef FINGERPRINT
     fingerprint = false;
 #endif
@@ -123,6 +127,28 @@ PairCHIMES::~PairCHIMES()
 
 void PairCHIMES::settings(int narg, char **arg)
 {
+#ifdef FASTMB
+	// The keyword fastmb, anywhere in the argument list, selects the fast many-body evaluation.
+	// The remaining arguments are handled as before.
+
+	std::vector<char *> other_args;
+
+	for (int a = 0; a < narg; a++)
+	{
+		if (utils::strmatch(arg[a], "^fastmb$"))
+			use_fastmb = true;
+		else
+			other_args.push_back(arg[a]);
+	}
+
+	narg = other_args.size();
+	arg  = other_args.data();
+#else
+	for (int a = 0; a < narg; a++)
+		if (utils::strmatch(arg[a], "^fastmb$"))
+			error -> all(FLERR,"pair_style chimesFF fastmb requires LAMMPS to be installed with ./install.sh FASTMB");
+#endif
+
 	if (narg > 3) 
 		error -> all(FLERR,"Illegal pair_style command. Expects no more than three arguments (string: fitting or fingerprint and iofreq)");
         
@@ -239,6 +265,37 @@ void PairCHIMES::coeff(int narg, char **arg)
 	// }
 	maxcut_4b = chimes_calculator.max_cutoff_4B();
 	// if (maxcut_4b==0.0 && fingerprint){maxcut_4b=maxcut_3b;}
+
+#ifdef FASTMB
+	// fastmb evaluates the analytic 3- and 4-body polynomials; it does not apply to tabulated
+	// 3-body parameters or to fingerprint runs, which need the per-cluster distances
+#ifdef TABULATION
+	if (use_fastmb && chimes_calculator.tabulate_3B)
+	{
+		if (comm->me == 0)
+			std::cout << "chimesFF: fastmb ignored for tabulated 3-body parameters" << std::endl;
+		use_fastmb = false;
+	}
+#endif
+#ifdef FINGERPRINT
+	if (use_fastmb && fingerprint)
+	{
+		if (comm->me == 0)
+			std::cout << "chimesFF: fastmb ignored when fingerprinting" << std::endl;
+		use_fastmb = false;
+	}
+#endif
+	if (use_fastmb)
+	{
+		std::string why = chimes_calculator.fastmb_init();
+
+		if (!why.empty())
+			error -> all(FLERR, "pair_style chimesFF fastmb: " + why);
+
+		if (comm->me == 0)
+			std::cout << "chimesFF: fastmb many-body evaluation enabled" << std::endl;
+	}
+#endif
 }
 void writeClusterDataComp(const string& filename, const vector<vector<double>>& data) 
 {
@@ -577,6 +634,10 @@ void PairCHIMES::compute(int eflag, int vflag)
 			std::cout << "Updating chimesFF neighbor lists..." << std::endl;
 			
 		build_mb_neighlists();		
+#ifdef FASTMB
+		if (use_fastmb)
+			build_fastmb_pair_registry();
+#endif
 		if (chimes_calculator.rank == 0)
 		{
 			std::cout << "	Rank " << me << " 3-body list size: " << neighborlist_3mers.size() << std::endl;
@@ -695,6 +756,32 @@ void PairCHIMES::compute(int eflag, int vflag)
             badness_stream << update->ntimestep << " " <<  chimes_calculator.get_badness() << endl;
 
 	// if (chimes_calculator.poly_orders[1] > 0 || tmp_FP)
+#ifdef FASTMB
+	if (use_fastmb && chimes_calculator.poly_orders[1] > 0)
+	{
+		////////////////////////////////////////
+		// Compute 3- and 4-body interactions through the pair cache
+		////////////////////////////////////////
+
+		// Distance and cutoff-weighted polynomials of every registered pair, once per step
+
+		for (int p = 0; p < fastmb_pair_i.size(); p++)
+		{
+			i = fastmb_pair_i[p];
+			j = fastmb_pair_j[p];
+
+			fastmb_pair_r[p] = get_dist(i, j, &fastmb_pair_dr[CHDIM*p]);
+
+			chimes_calculator.fastmb_fill_cache(p, chimes_calculator.fastmb_pair_type(chimes_type[type[i]-1], chimes_type[type[j]-1]), fastmb_pair_r[p]);
+		}
+
+		compute_fastmb(3);
+
+		if (chimes_calculator.poly_orders[2] > 0)
+			compute_fastmb(4);
+	}
+	else
+#endif
 	if (chimes_calculator.poly_orders[1] > 0)
 	{
 		////////////////////////////////////////
@@ -769,6 +856,9 @@ void PairCHIMES::compute(int eflag, int vflag)
 	#endif
 
     // if (chimes_calculator.poly_orders[2] > 0 || tmp_FP)
+#ifdef FASTMB
+	if (!use_fastmb)    // Otherwise already done with the 3-body term above
+#endif
 	if (chimes_calculator.poly_orders[2] > 0)
 
 	{
@@ -855,6 +945,188 @@ if (vflag_fdotr)
 
 	return;
 }
+
+#ifdef FASTMB
+
+void PairCHIMES::build_fastmb_pair_registry()
+{
+	// Give every distinct atom pair of the 3- and 4-body neighbor lists an index, and record for each
+	// cluster slot its pair index and whether the slot runs against the stored (i < j) direction.
+	// Called whenever the many-body neighbor lists are rebuilt.
+
+	fastmb_pair_i.clear();
+	fastmb_pair_j.clear();
+	fastmb_3mer_pair_idx.resize(3*neighborlist_3mers.size());
+	fastmb_4mer_pair_idx.resize(6*neighborlist_4mers.size());
+
+	std::unordered_map<long long, int> pair_index;	// (i, j) with i < j -> pair idx
+	long long nall = atom->nlocal + atom->nghost;
+
+	auto register_pair = [&](int u, int v) -> int
+	{
+		int       i   = (u < v) ? u : v;
+		int       j   = (u < v) ? v : u;
+		long long key = (long long)i*nall + j;
+		int       idx;
+
+		std::unordered_map<long long, int>::iterator it = pair_index.find(key);
+
+		if (it != pair_index.end())
+			idx = it->second;
+		else
+		{
+			idx = fastmb_pair_i.size();
+			pair_index[key] = idx;
+			fastmb_pair_i.push_back(i);
+			fastmb_pair_j.push_back(j);
+		}
+
+		return 2*idx + ((u < v) ? 0 : 1);
+	};
+
+	for (int c = 0; c < neighborlist_3mers.size(); c++)
+	{
+		const std::vector<int> & atoms = neighborlist_3mers[c];
+
+		fastmb_3mer_pair_idx[3*c+0] = register_pair(atoms[0], atoms[1]);	// ij
+		fastmb_3mer_pair_idx[3*c+1] = register_pair(atoms[0], atoms[2]);	// ik
+		fastmb_3mer_pair_idx[3*c+2] = register_pair(atoms[1], atoms[2]);	// jk
+	}
+
+	for (int c = 0; c < neighborlist_4mers.size(); c++)
+	{
+		const std::vector<int> & atoms = neighborlist_4mers[c];
+
+		fastmb_4mer_pair_idx[6*c+0] = register_pair(atoms[0], atoms[1]);	// ij
+		fastmb_4mer_pair_idx[6*c+1] = register_pair(atoms[0], atoms[2]);	// ik
+		fastmb_4mer_pair_idx[6*c+2] = register_pair(atoms[0], atoms[3]);	// il
+		fastmb_4mer_pair_idx[6*c+3] = register_pair(atoms[1], atoms[2]);	// jk
+		fastmb_4mer_pair_idx[6*c+4] = register_pair(atoms[1], atoms[3]);	// jl
+		fastmb_4mer_pair_idx[6*c+5] = register_pair(atoms[2], atoms[3]);	// kl
+	}
+
+	fastmb_pair_r .resize(fastmb_pair_i.size());
+	fastmb_pair_dr.resize(CHDIM*fastmb_pair_i.size());
+
+	chimes_calculator.fastmb_resize_cache(fastmb_pair_i.size());
+}
+
+void PairCHIMES::compute_fastmb(int nbody)
+{
+	// 3- or 4-body forces, energy and virial from the pair cache. Each cluster returns its energy and
+	// dE/dr for every slot; the forces and stress of a slot follow from dE/dr and the pair vector,
+	// as in chimesFF::compute_3B/compute_4B.
+
+	static const int slot_atoms_3b[3][2] = {{0,1},{0,2},{1,2}};
+	static const int slot_atoms_4b[6][2] = {{0,1},{0,2},{0,3},{1,2},{1,3},{2,3}};
+
+	const int   npairs         = (nbody == 3) ? 3 : 6;
+	const int (*slot_atoms)[2] = (nbody == 3) ? slot_atoms_3b : slot_atoms_4b;
+
+	const std::vector<std::vector<int> > & clusters         = (nbody == 3) ? neighborlist_3mers : neighborlist_4mers;
+	const int                            * cluster_pair_idx = (nbody == 3) ? fastmb_3mer_pair_idx.data() : fastmb_4mer_pair_idx.data();
+
+	double **f    = atom->f;
+	int     *type = atom->type;
+
+	// Per-atom energy or virial tallies need one ev_tally_mb call per cluster; otherwise the summed
+	// energy and virial are tallied once at the end
+
+	bool per_cluster_tally = evflag && (eflag_atom || vflag_atom);
+
+	std::vector<double> stensor(6);
+	int    atmidxlst[6][2];
+	int    typ_idxs[4];
+	int    pair_idxs[6];
+	double deriv[6];
+	double energy;
+	double energy_sum = 0.0;
+	double stress_sum[6] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+
+	for (int c = 0; c < clusters.size(); c++)
+	{
+		const int *atoms = clusters[c].data();
+
+		for (int a = 0; a < nbody; a++)
+			typ_idxs[a] = chimes_type[type[atoms[a]]-1];
+
+		for (int s = 0; s < npairs; s++)
+			pair_idxs[s] = cluster_pair_idx[npairs*c + s] >> 1;
+
+		int key = chimes_calculator.fastmb_cluster_key(nbody, typ_idxs);
+
+		if (!chimes_calculator.fastmb_compute_cluster(nbody, key, pair_idxs, energy, deriv))
+			continue;
+
+		// Forces and stress of each slot from dE/dr
+
+		double stress[6] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+
+		for (int s = 0; s < npairs; s++)
+		{
+			int     p       = pair_idxs[s];
+			double  sign    = (cluster_pair_idx[npairs*c + s] & 1) ? -1.0 : 1.0;	// slot runs against the stored direction
+			double *dr      = &fastmb_pair_dr[CHDIM*p];
+			double  fscalar = deriv[s] / fastmb_pair_r[p];
+			int     u       = atoms[slot_atoms[s][0]];
+			int     v       = atoms[slot_atoms[s][1]];
+
+			for (int idx = 0; idx < CHDIM; idx++)
+			{
+				f[u][idx] += sign * fscalar * dr[idx];
+				f[v][idx] -= sign * fscalar * dr[idx];
+			}
+
+			stress[0] -= fscalar * dr[0] * dr[0];	// xx tensor component
+			stress[1] -= fscalar * dr[0] * dr[1];	// xy tensor component
+			stress[2] -= fscalar * dr[0] * dr[2];	// xz tensor component
+			stress[3] -= fscalar * dr[1] * dr[1];	// yy tensor component
+			stress[4] -= fscalar * dr[1] * dr[2];	// yz tensor component
+			stress[5] -= fscalar * dr[2] * dr[2];	// zz tensor component
+		}
+
+		if (per_cluster_tally)
+		{
+			for (int s = 0; s < npairs; s++)
+			{
+				atmidxlst[s][0] = atoms[slot_atoms[s][0]];
+				atmidxlst[s][1] = atoms[slot_atoms[s][1]];
+			}
+
+			for (int k = 0; k < 6; k++)
+				stensor[k] = stress[k];
+
+			ev_tally_mb(nbody, npairs, atmidxlst, energy, stensor);
+		}
+		else
+		{
+			energy_sum += energy;
+
+			for (int k = 0; k < 6; k++)
+				stress_sum[k] += stress[k];
+		}
+	}
+
+	// Global-only tallies: one call carries the summed energy and virial (atmidxlst is not used)
+
+	if (evflag && !per_cluster_tally && !clusters.empty())
+	{
+		const int *atoms = clusters[0].data();
+
+		for (int s = 0; s < npairs; s++)
+		{
+			atmidxlst[s][0] = atoms[slot_atoms[s][0]];
+			atmidxlst[s][1] = atoms[slot_atoms[s][1]];
+		}
+
+		for (int k = 0; k < 6; k++)
+			stensor[k] = stress_sum[k];
+
+		ev_tally_mb(nbody, npairs, atmidxlst, energy_sum, stensor);
+	}
+}
+
+#endif
 
 void PairCHIMES::set_chimes_type()
 {

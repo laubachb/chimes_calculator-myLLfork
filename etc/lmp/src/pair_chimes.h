@@ -74,6 +74,22 @@ namespace LAMMPS_NS
             // Prepare files necessary for ChIMES fitting 
             
             bool     for_fitting;
+
+#ifdef FASTMB
+			// Fast many-body evaluation (pair_style chimesFF fastmb)
+
+			bool                use_fastmb;             // Evaluate the 3- and 4-body terms through the chimesFF pair cache
+
+			std::vector<int>    fastmb_pair_i;          // [pair idx] local index of the first atom of a registered pair (i < j)
+			std::vector<int>    fastmb_pair_j;          // [pair idx] local index of the second atom
+			std::vector<double> fastmb_pair_r;          // [pair idx] pair distance
+			std::vector<double> fastmb_pair_dr;         // [pair idx*CHDIM + dim] distance components, atom j minus atom i
+			std::vector<int>    fastmb_3mer_pair_idx;   // [3mer idx*3 + slot] 2*pair idx, plus 1 if the slot runs from j to i
+			std::vector<int>    fastmb_4mer_pair_idx;   // [4mer idx*6 + slot]
+
+			void   build_fastmb_pair_registry();        // Assigns pair indices to the pairs of the many-body neighbor lists
+			void   compute_fastmb(int nbody);           // 3- or 4-body forces, energy and virial from the pair cache
+#endif
             bool     fingerprint;
 			int IO_freq;
             ofstream badness_stream;			
