@@ -79,6 +79,7 @@ PairCHIMES::PairCHIMES(LAMMPS *lmp) : Pair(lmp)
     use_fastmb  = false;
     fastmb_simd = true;
     fastmb_rips = true;
+    fastmb_hash_ownership = true;
     fastmb_warned_self_image = false;
 #endif
 #ifdef FINGERPRINT
@@ -135,9 +136,10 @@ void PairCHIMES::settings(int narg, char **arg)
 {
 #ifdef FASTMB
 	// The keyword fastmb, anywhere in the argument list, selects the fast many-body evaluation.
-	// For testing, nosimd evaluates clusters one at a time instead of in SIMD batches and norips
-	// builds the cluster lists with the nested loops of build_mb_neighlists. The remaining
-	// arguments are handled as before.
+	// For testing, nosimd evaluates clusters one at a time instead of in SIMD batches, norips
+	// builds the cluster lists with the nested loops of build_mb_neighlists, and orient tag
+	// assigns each cluster to its lowest-tag atom (the default rule) instead of to its atom with
+	// the lowest hashed tag. The remaining arguments are handled as before.
 
 	std::vector<char *> other_args;
 
@@ -149,6 +151,20 @@ void PairCHIMES::settings(int narg, char **arg)
 			fastmb_simd = false;
 		else if (utils::strmatch(arg[a], "^norips$"))
 			fastmb_rips = false;
+		else if (utils::strmatch(arg[a], "^orient$"))
+		{
+			if (a + 1 >= narg)
+				error -> all(FLERR,"Illegal pair_style chimesFF command: orient expects tag or hash");
+
+			std::string rule = arg[++a];
+
+			if (rule == "tag")
+				fastmb_hash_ownership = false;
+			else if (rule == "hash")
+				fastmb_hash_ownership = true;
+			else
+				error -> all(FLERR,"Illegal pair_style chimesFF command: orient expects tag or hash");
+		}
 		else
 			other_args.push_back(arg[a]);
 	}
@@ -306,7 +322,8 @@ void PairCHIMES::coeff(int narg, char **arg)
 
 		if (comm->me == 0)
 			std::cout << "chimesFF: fastmb many-body evaluation enabled; SIMD batches " << (fastmb_simd ? "on" : "off")
-			          << ", bitset cluster lists " << (fastmb_rips ? "on" : "off") << std::endl;
+			          << ", bitset cluster lists " << (fastmb_rips ? "on" : "off")
+			          << ", cluster ownership by " << (fastmb_hash_ownership ? "hashed tag" : "tag") << std::endl;
 	}
 #endif
 }
@@ -968,10 +985,17 @@ bool PairCHIMES::build_fastmb_neighlists()
 {
 	// ChIMES clusters are the sets of atoms in which every pair lies within the (padded) many-body
 	// cutoff: the triangles and tetrahedra of the Vietoris-Rips complex of the atoms. For each local
-	// atom i, take its forward neighbors (atoms with a larger tag), compute their mutual distances
-	// once and store the results as adjacency bitsets; triangles (i,a,b) are then the set bits of
-	// the row of a after a, and tetrahedra (i,a,b,c) the set bits of row a AND row b after b. This
-	// lists exactly the clusters build_mb_neighlists lists, each once from its lowest-tag atom.
+	// atom i, take its forward neighbors (atoms later in the ownership order), compute their mutual
+	// distances once and store the results as adjacency bitsets; triangles (i,a,b) are then the set
+	// bits of the row of a after a, and tetrahedra (i,a,b,c) the set bits of row a AND row b after
+	// b. This lists the same clusters as build_mb_neighlists, each once, from its first atom in the
+	// ownership order.
+	//
+	// Ownership order: a cluster is evaluated by the rank that owns its first atom. Tag order (the
+	// rule of build_mb_neighlists) is spatially correlated after replicate or read_data, so every
+	// cluster that straddles a subdomain boundary goes to the same side and some ranks get far more
+	// work than others. Ordering by a bijective hash of the tag (odd multiplier modulo 2^64) gives
+	// each side an equal chance. The set of clusters and the energy are unchanged.
 	//
 	// Returns false on every rank, with the lists cleared, if any rank sees two neighbor candidates
 	// with the same tag (periodic self-images of a box smaller than twice the padded cutoff), which
@@ -994,7 +1018,12 @@ bool PairCHIMES::build_fastmb_neighlists()
 	double cut_max_sq = std::max(cut_3b_sq, cut_4b_sq);
 	bool   do_4b = chimes_calculator.poly_orders[2] > 0;
 
-	std::vector<std::pair<tagint, int> > forward;    // (tag, local index) of the forward neighbors of i, sorted by tag
+	auto ownership_key = [&](tagint t) -> unsigned long long
+	{
+		return fastmb_hash_ownership ? (unsigned long long)t * 0x9E3779B97F4A7C15ULL : (unsigned long long)t;
+	};
+
+	std::vector<std::pair<unsigned long long, int> > forward;    // (ownership key, local index) of the forward neighbors of i, sorted by key
 	std::vector<unsigned long long>      adj_3b;     // [neighbor a][word] bit b set if a and b are within the 3-body cutoff
 	std::vector<unsigned long long>      adj_4b;
 	std::vector<char>                    in_3b;      // [neighbor a] a is within the 3-body cutoff of i
@@ -1009,7 +1038,8 @@ bool PairCHIMES::build_fastmb_neighlists()
 		if (chimes_type[type[i]-1] < 0)
 			continue;
 
-		int *jlist = list->firstneigh[i];
+		int                *jlist = list->firstneigh[i];
+		unsigned long long  key_i = ownership_key(tag[i]);
 
 		forward.clear();
 
@@ -1020,7 +1050,9 @@ bool PairCHIMES::build_fastmb_neighlists()
 			if ((j == i) || (chimes_type[type[j]-1] < 0))
 				continue;
 
-			if (tag[j] < tag[i])
+			unsigned long long key_j = ownership_key(tag[j]);
+
+			if (key_j < key_i)
 				continue;
 
 			double dx = x[j][0] - x[i][0];
@@ -1028,7 +1060,7 @@ bool PairCHIMES::build_fastmb_neighlists()
 			double dz = x[j][2] - x[i][2];
 
 			if (dx*dx + dy*dy + dz*dz < cut_max_sq)
-				forward.push_back(std::make_pair(tag[j], j));
+				forward.push_back(std::make_pair(key_j, j));
 		}
 
 		std::sort(forward.begin(), forward.end());
@@ -1037,7 +1069,7 @@ bool PairCHIMES::build_fastmb_neighlists()
 		int nword = (nf + 63) / 64;
 
 		for (int a = 1; a < nf; a++)
-			if (forward[a].first == forward[a-1].first)
+			if (forward[a].first == forward[a-1].first)    // same tag (the hash is one-to-one)
 				self_image = 1;
 
 		if (self_image)
@@ -1082,7 +1114,7 @@ bool PairCHIMES::build_fastmb_neighlists()
 			}
 		}
 
-		// Triangles (i,a,b) and tetrahedra (i,a,b,c) with a < b < c in tag order
+		// Triangles (i,a,b) and tetrahedra (i,a,b,c) with a < b < c in the ownership order
 
 		for (int a = 0; a < nf; a++)
 		{

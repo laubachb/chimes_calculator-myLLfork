@@ -81,6 +81,7 @@ namespace LAMMPS_NS
 			bool                use_fastmb;             // Evaluate the 3- and 4-body terms through the chimesFF pair cache
 			bool                fastmb_simd;            // Sweep clusters of one type in SIMD batches (keyword nosimd: one at a time)
 			bool                fastmb_rips;            // Build cluster lists by bitset intersection (keyword norips: the nested loops of build_mb_neighlists)
+			bool                fastmb_hash_ownership;  // A cluster is owned by its atom with the smallest hashed tag (keyword orient tag: smallest tag)
 			bool                fastmb_warned_self_image; // The fall-back to build_mb_neighlists has been reported once
 
 			std::vector<int>    fastmb_pair_i;          // [pair idx] local index of the first atom of a registered pair (i < j)
