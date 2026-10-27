@@ -14,6 +14,8 @@
 # Note that additional arguments can be specified, i.e.:
 #
 #   ./install.sh FINGERPRINT or TABULATION, currently only 1 or the other are possible.
+#   ./install.sh FASTMB enables the fast many-body evaluation (pair_style chimesFF fastmb);
+#   it can be combined with either of the above, e.g. ./install.sh TABULATION FASTMB
 
 echo ""
 echo "Note: This install script assumes: "
@@ -25,15 +27,26 @@ echo ""
 # ********** FLAG HANDLING **********
 TAB_FLAG=""
 FINGERPRINT_FLAG=""
+FASTMB_FLAG=""
 
-if [[ "$1" == "TABULATION" ]]; then
-    TAB_FLAG="-DTABULATION"
-    echo "Enabling TABULATION compilation flag for ChIMES files"
-elif [[ "$1" == "FINGERPRINT" ]]; then
-    FINGERPRINT_FLAG="-DFINGERPRINT"
-    echo "Enabling FINGERPRINT compilation flag for ChIMES files"
-elif [[ -n "$1" ]]; then
-    echo "ERROR: Invalid option '$1'. Use only one of: TABULATION or FINGERPRINT"
+for opt in "$@"; do
+    if [[ "$opt" == "TABULATION" ]]; then
+        TAB_FLAG="-DTABULATION"
+        echo "Enabling TABULATION compilation flag for ChIMES files"
+    elif [[ "$opt" == "FINGERPRINT" ]]; then
+        FINGERPRINT_FLAG="-DFINGERPRINT"
+        echo "Enabling FINGERPRINT compilation flag for ChIMES files"
+    elif [[ "$opt" == "FASTMB" ]]; then
+        FASTMB_FLAG="-DFASTMB"
+        echo "Enabling FASTMB compilation flag for ChIMES files"
+    else
+        echo "ERROR: Invalid option '$opt'. Valid options are TABULATION, FINGERPRINT and FASTMB"
+        exit 1
+    fi
+done
+
+if [[ -n "$TAB_FLAG" && -n "$FINGERPRINT_FLAG" ]]; then
+    echo "ERROR: TABULATION and FINGERPRINT cannot be combined"
     exit 1
 fi
 
@@ -62,10 +75,10 @@ if [[ "$hosttype" == "UT-TACC" ]]; then
 fi
 
 # ********** MODIFIED MAKEFILE HANDLING **********
-if [[ -n "$TAB_FLAG" ]]; then
-    sed -e "/^CCFLAGS[[:space:]]*=/ s|$| $TAB_FLAG|" "$MAKEFILE_SRC" > build/${lammps}/src/MAKE/Makefile.mpi_chimes
-elif [[ -n "$FINGERPRINT_FLAG" ]]; then
-    sed -e "/^CCFLAGS[[:space:]]*=/ s|$| $FINGERPRINT_FLAG|" "$MAKEFILE_SRC" > build/${lammps}/src/MAKE/Makefile.mpi_chimes
+# Append the selected compilation flags to the CCFLAGS line of the makefile
+EXTRA_CCFLAGS="$TAB_FLAG $FINGERPRINT_FLAG $FASTMB_FLAG"
+if [[ -n "${EXTRA_CCFLAGS// /}" ]]; then
+    sed -e "/^CCFLAGS[[:space:]]*=/ s|$| $EXTRA_CCFLAGS|" "$MAKEFILE_SRC" > build/${lammps}/src/MAKE/Makefile.mpi_chimes
 else
     cp "$MAKEFILE_SRC" build/${lammps}/src/MAKE/Makefile.mpi_chimes
 fi
